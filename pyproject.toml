@@ -1,0 +1,8 @@
+[project]
+name = "pokemon-rl"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pyboy>=2.7.0",
+    "stable-baselines3[extra]>=2.9.0",
+]

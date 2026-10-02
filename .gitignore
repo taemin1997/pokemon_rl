@@ -1,0 +1,19 @@
+# ROM / 세이브 (저작권 있는 파일)
+roms/
+states/
+*.gb
+*.gbc
+*.ram
+*.sav
+*.rtc
+*.state
+
+# 학습 결과물 (용량 큼)
+models/
+runs/
+
+# 파이썬 / 에디터
+.venv/
+__pycache__/
+*.pyc
+.vscode/
