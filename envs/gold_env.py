@@ -10,11 +10,14 @@ CartPole에서는 gym.make("CartPole-v1") 한 줄로 환경이 생겼음
 """
 
 import gymnasium as gym
+import os
+
 import numpy as np
 from gymnasium import spaces
 from pyboy import PyBoy
 
 from envs import memory_map as mm
+from envs.menu import run_event
 
 # ---------------------------------------------------------------
 # 행동: 에이전트가 고를 수 있는 버튼
@@ -87,6 +90,8 @@ class GoldEnv(gym.Env):
         move_mode="tap",
         obs_memory=False,
         obs_goal=False,
+        fast_battle=False,
+        auto_event=False,
     ):
         super().__init__()
         self.state_path = state_path
@@ -106,6 +111,15 @@ class GoldEnv(gym.Env):
         #   안 주는 것: 좌표, 방향, 거리 (그건 거리 보상처럼 "어느 쪽으로 가라"는 선생님 신호가 됨)
         #   크기를 맵 그룹/번호 최대치로 고정 → 구간이 늘어도 신경망 입력 크기가 안 바뀜
         self.obs_goal = obs_goal
+        # 전투 빠르게 (학습 속도용, 기본 끔 → 예전 실험과 같음)
+        #   게임 옵션 "글자 빠름 + 전투 애니메이션 끔" + 자동 전투 A 연타 간격 24 → 12프레임
+        #   왜: 자동 전투가 에뮬레이터 시간의 절반 이상 (전투 하나 약 2,200프레임 vs 걸음 40프레임)
+        #   전투 결과(승패, 잃은 HP)는 같은지 확인함 (progress/battle.md). 판마다 난수 타이밍은 달라지므로 예전 실험과 섞어 비교하지 않음
+        self.fast_battle = fast_battle
+        # auto_event (M2b부터): 방향키를 눌렀는데 안 움직였고 움직일 수도 없으면(트레이너 시야/대화로 잠김)
+        #   envs.menu.run_event로 대화+전투를 A로 넘김. 통합 실행(run_story)과 같은 처리 → 학습/평가/실전 조건을 맞춤
+        #   비계 종류: 인터페이스 처리 (대화 넘기기). 기본 끔 (예전 실험과 같은 조건)
+        self.auto_event = auto_event
         first_goal = list(goal_maps)[0] if goal_maps else (0, 0)
         self.goal_vec = np.zeros(GOAL_GROUPS + GOAL_NUMBERS, dtype=np.float32)
         self.goal_vec[min(first_goal[0], GOAL_GROUPS - 1)] = 1.0
@@ -138,6 +152,12 @@ class GoldEnv(gym.Env):
         # 사람이 보고 싶을 때만 render_mode="human"으로 창을 띄움
         window = "SDL2" if render_mode == "human" else "null"
         self.pyboy = PyBoy(rom_path, window=window)
+        # 게임 시계 고정 (10-10 발견: PyBoy RTC는 컴퓨터 시각을 따라가서 실행 시각마다 게임 시간대가 달라짐
+        #   → 야생 포켓몬/전투 수가 바뀌어 같은 시드도 재현 안 됨). 환경변수 POKE_RTC_LOCK=1이면 고정
+        #   (평가 재현용. 진단/통합 실행의 병렬 프로세스까지 한 번에 적용하려고 인자 대신 환경변수)
+        #   고정하면 start.state 기준 게임 시각 약 8:21 (아침)
+        if os.environ.get("POKE_RTC_LOCK") == "1":
+            self.pyboy.rtc_lock_experimental(True)
         # 0 = 속도 제한 없음. 창을 띄울 땐 사람이 볼 수 있게 3배속 정도로
         self.pyboy.set_emulation_speed(3 if render_mode == "human" else 0)
 
@@ -202,6 +222,7 @@ class GoldEnv(gym.Env):
             "reached_goal": self.reached_goal,
             "left_area": self.left_area,
             "whiteouts": self.whiteouts,
+            "events": self.events,
             "shaping_sum": self.shaping_sum,
         }
         if self.reached_goal:
@@ -214,21 +235,34 @@ class GoldEnv(gym.Env):
         return info
 
     # -----------------------------------------------------------
+    def _settle_battle(self):
+        """막힌 것처럼 보일 때 먼저 전투 시작 전환 중인지 확인 (인카운터는 걸음 뒤 150~170프레임에 시작될 수 있음)
+        → 전투면 자동 전투로 처리하고 True (그래야 run_event의 느린 확인 경로로 안 감)"""
+        if not self.auto_battle:
+            return False
+        for _ in range(8):
+            if mm.in_battle(self.pyboy):
+                self._run_auto_battle()
+                return True
+            self.pyboy.tick(20, False)
+        return False
+
     def _run_auto_battle(self):
         """전투가 끝날 때까지 A 연타. 커서 기본 위치가 '싸우다' → 첫 번째 기술이라 A만 누르면 공격함
         도중에 지면 화이트아웃(집으로 이동)되고, 그건 allowed_maps 밖이라 종료로 처리됨"""
+        from envs.battle import auto_battle
         self.battles += 1
-        frames = 0
-        lowest_hp = mm.read_party_hp_total(self.pyboy)
         # 안전장치: 이상한 메뉴에 갇혀도 무한히 돌지 않게 약 100초(6000프레임)에서 끊고 에이전트에게 넘김
-        while mm.in_battle(self.pyboy) and frames < 6000:
-            self.pyboy.button_press("a")
-            self.pyboy.tick(4, False)
-            self.pyboy.button_release("a")
-            self.pyboy.tick(20, self.render_mode == "human")  # 창으로 볼 땐 전투 화면도 보이게
-            frames += 24
-            lowest_hp = min(lowest_hp, mm.read_party_hp_total(self.pyboy))
+        # 10-12: 1번 기술 PP 0이면 A 연타가 안 끝남 (M2B 멈춤) → auto_battle이 그때부터 PP 남은 기술을 고름
+        #   1번 PP가 남아 있으면 예전과 같은 A 연타 (창으로 볼 땐 전투 화면도 보이게 render)
+        r = auto_battle(self.pyboy, wait=8 if self.fast_battle else 20, max_frames=6000,
+                        render=self.render_mode == "human")
+        frames, lowest_hp = r["frames"], r["min_hp"]
+        self.pp_switches = getattr(self, "pp_switches", 0) + int(r["pp_switch"])
         self.battle_frames += frames
+        if mm.in_battle(self.pyboy) and frames >= 6000:
+            from envs.menu import _dump_stuck
+            _dump_stuck(self.pyboy, "autobattle")
         # 전투 중 파티 HP 합이 0까지 내려갔으면 전멸 → 게임이 집(마지막 회복 장소)으로 보냄
         # 맵 번호로 추측하지 않고 게임 상태(HP)로 판단 → 어느 구간에서든 그대로 작동
         if lowest_hp == 0:
@@ -246,6 +280,13 @@ class GoldEnv(gym.Env):
         # 세이브 스테이트로 되돌림 = CartPole에서 막대를 다시 세우는 것과 같은 역할
         # 매번 오프닝부터 하면 에피소드 대부분이 인트로 대사 넘기기가 돼버림
         self._load_start()
+        # 세이브 상태를 불러와도 화면은 다음 프레임을 그려야 바뀜 → 1프레임 그려서 첫 관찰을 맞춤 (10-08 버그 수정)
+        #   예전: 판의 첫 관찰 = 직전 판의 마지막 화면 (첫 한 걸음을 엉뚱한 화면 보고 고름)
+        #   goal_probe처럼 리셋만 반복하는 진단은 모든 칸이 같은 화면으로 시험됐었음
+        self.pyboy.tick(1, True)
+        if self.fast_battle:
+            opt = mm.read_byte(self.pyboy, mm.OPTIONS)
+            self.pyboy.memory[1, mm.OPTIONS] = (opt & ~0x07) | 0x01 | 0x80
 
         self.step_count = 0
         self._last_action = None   # 짧은 기억도 판마다 초기화
@@ -260,6 +301,7 @@ class GoldEnv(gym.Env):
         self.battles = 0
         self.battle_frames = 0
         self.whiteouts = 0
+        self.events = 0
         self.exp_start = mm.read_mon1_exp(self.pyboy)
         self.reached_goal = False
         self.left_area = False
@@ -295,6 +337,13 @@ class GoldEnv(gym.Env):
         if self.auto_battle and mm.in_battle(self.pyboy):
             self._run_auto_battle()
             self.pyboy.tick(1, True)  # 관찰용 화면 갱신
+        elif (self.auto_event and button in MOVE_BUTTONS and mm.read_position(self.pyboy) == pos_before
+              and mm.read_byte(self.pyboy, mm.SCRIPT_LOCK) != 0):
+            r = run_event(self.pyboy)
+            self.events += 1
+            if r["battle"]:
+                self.battles += 1
+            self.pyboy.tick(1, True)
 
         self.step_count += 1
 

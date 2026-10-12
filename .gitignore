@@ -9,8 +9,8 @@ states/
 *.state
 
 # 학습 결과물 (용량 큼)
-models/
-runs/
+/models/
+/runs/
 
 # 파이썬 / 에디터
 .venv/
@@ -18,3 +18,5 @@ __pycache__/
 *.pyc
 .vscode/
 .env
+videos/
+

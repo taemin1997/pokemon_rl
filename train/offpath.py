@@ -61,7 +61,7 @@ def build(seg):
     dist = {tuple(r[:4]): r[4] for r in json.loads(Path(seg.dist_path).read_text())}
     area = set(map(tuple, seg.allowed_maps))
 
-    ex = Explorer(seg.start_state)
+    ex = Explorer(seg.start_state, trainers=seg.trainers)
     states, path_dist, nearest = {}, {}, {}
     queue = deque()
     for i, (pos, sz) in enumerate(zip(demo["positions"], demo["states"])):
@@ -118,7 +118,8 @@ def load_tiles(seg):
 def make_env(seg, policy, state_bytes):
     cfg = {} if policy == "random" else load_env_config(Path(policy).parent)
     env = GoldEnv(**{**seg.env_kwargs(), "move_mode": cfg.get("move_mode", "tap"),
-                     "obs_memory": cfg.get("obs_memory", False), "obs_goal": cfg.get("obs_goal", False)})
+                     "obs_memory": cfg.get("obs_memory", False), "obs_goal": cfg.get("obs_goal", False),
+                     "fast_battle": cfg.get("fast_battle", False), "auto_event": cfg.get("auto_event", False)})
     if state_bytes is not None:
         # GoldEnv는 파일 경로에서 불러오니까, 판 시작 상태만 메모리에서 불러오게 바꿈
         import io

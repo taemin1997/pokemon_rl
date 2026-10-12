@@ -1,0 +1,153 @@
+"""
+progress/ 문서 파일 만들기: 모델 카드(models/), 특이사항(events/)의 처음 판 + 색인
+
+왜: 사용자 요청 (10-08) — 요약/일지는 날짜마다, 모델마다, 특이사항마다 새 파일
+- 모델 카드: 모델 하나 = 파일 하나. 설정은 models/<이름>/env_config.json에서 자동으로 읽음
+- 이 스크립트는 처음 한 번 + 새 모델/사건이 생길 때 아래 표에 한 줄 추가하고 다시 돌리면 됨
+  이미 있는 카드는 덮어쓰지 않음 (손으로 고친 내용 보존). 색인(models/README.md, events/README.md)만 다시 만듦
+
+실행: uv run python progress/make_docs.py
+"""
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+REPO = ROOT.parent
+
+# (이름, 날짜, 구간/환경, 보상, 바꾼 것, 결과, 상태, 판정/메모)
+MODELS = [
+    ("v1_explore", "10-02", "home (집 1층, 2048스텝)", "v1_explore (탐험)", "기준: 탐험 보상, 집에서 시작", "시작 근처 맵 7개, 550k부터 정체", "✅ 1M", "탐험 보상만으론 마을까지"),
+    ("v2_ent003", "10-02", "home", "v1_explore", "ent_coef 0.01 → 0.03", "엔트로피 유지, 못 넘음", "✅ 1M", "탐험 부족은 주원인 아님"),
+    ("A_route29", "10-02", "route29", "탐험 (이탈 = 실패)", "29번도로 시작, 이탈 = 실패, 전투 자동", "무효", "❌", "reward hacking: 나가는 걸음에 새 맵 +1 → events/2026-10-02_reward-hacking.md"),
+    ("A2_route29", "10-02", "route29", "탐험", "A + 버그 수정", "풀숲 탈출 0 → 100%, 무궁 0%", "✅ 250k", "다음 병목: U턴"),
+    ("A3_route29", "10-06", "route29", "A3_goal (탐험 + 도착 +10)", "A2 + 도착 보너스", "무궁 0%", "✅ 250k", "결과만 칭찬하면 신호가 안 닿음"),
+    ("B_route29", "10-05", "route29", "거리 보상", "A2 + BFS 거리 보상", "무궁 64~72%", "✅ 250k", "실패는 거의 전멸"),
+    ("B2_route29", "10-06", "route29", "task (도착 +10, 거리, 새 칸 끔)", "보상 역할 정리", "무궁 88~96%, 약 140걸음", "✅ 250k", "거리 보상 기준선. 경로 밖에선 무너짐 (OFFPATH1)"),
+    ("RC_route29", "10-06", "route29_rc", "goal_only", "역방향 커리큘럼 (무작위 확장)", "전선 9걸음 정체", "❌ 67k 중단", "확산이라 안 넓어짐"),
+    ("RC2_route29", "10-06", "route29_rc2", "goal_only", "RC + 중복 거름, 먼 후보", "전선 5걸음", "❌ 101k", ""),
+    ("AC_route29", "10-06", "route29_ac", "goal_only", "Go-Explore식 아카이브", "도착 67 → 14%, 빙글빙글", "❌ 77k 중단", "너무 빨리 넓어짐"),
+    ("AC2_route29", "10-06", "route29_ac2", "goal_only", "잘하는 자리 판만 아카이브에", "전선 4.5, 입구 0%", "❌", ""),
+    ("AC3_route29", "10-06", "route29_ac3", "goal_only", "공간 전선 (좌표 6칸 이내)", "U턴(약 50)에서 정체, 입구 0%", "⚠️ 250k", "좌표 = 다음 단계 가정이 U턴에서 깨짐"),
+    ("DEMO_route29", "10-06", "route29_demo", "goal_only", "시연 경로(BFS)를 따라 전선", "전선 76, 입구 0%", "⚠️ 250k", "걸음 56% 제자리 회전 (tap 조작)"),
+    ("DEMO_TILE_route29", "10-06", "route29_demo", "goal_only", "DEMO + 1칸 조작", "무궁 88/92/100%", "✅ 250k", "조작 방식이 결정적. 경로 밖 3칸+ 급락 (빼둔 지역 0~2%)"),
+    ("DEMO_TILE_route29_seed1", "10-06", "route29_demo", "goal_only", "DEMO_TILE, 시드 1", "80/96/92%", "✅ 250k", "M1 정립 (두 시드). 빼둔 지역 52~55%"),
+    ("NB_scratch", "10-07", "newbark_demo", "goal_only", "연두마을 구간, 처음부터", "100%, 24걸음 (최단)", "✅ 100k", "M1 대표 조합의 앞 구간"),
+    ("NB_init29", "10-07", "newbark_demo", "goal_only", "연두마을 구간, DEMO_TILE 가중치에서", "5만에 24% (scratch 100%), 끝까지 28%", "⚠️ 7.4만 (프로세스 꺼짐)", "부정적 전이 + 잊음 (T1)"),
+    ("LAT1_route29", "10-07", "route29_demo_lat", "goal_only", "DEMO_TILE + 경로 옆 시작 25%, 폭 커리큘럼", "경로 위 96/100/100%, 빼둔 지역 79%", "✅ 300k", "**M1 대표** (NB_scratch와 이어 붙여 96%)"),
+    ("LAT1_route29_seed1", "10-07", "route29_demo_lat", "goal_only", "LAT1, 시드 1", "빼둔 지역 80%, 경로 위 96/100/92%", "✅ 300k", "재현. 실패 3칸 동일"),
+    ("LAT1_MEM_route29", "10-07", "route29_demo_lat", "goal_only", "LAT1 + 짧은 기억 (`--memory`)", "혼동 통로 50% (LAT1 8%), 빼둔 지역 89%", "✅ 300k", "벽 고집은 그대로 44%"),
+    ("GOAL1_route29", "10-08", "route29_bidir_lat", "goal_only", "정책 하나로 29번도로 양방향 + 목표 맵 관찰 (`--goal`)", "정방향 0%, 반대 80%, 분기점 바뀜 18%", "❌ 500k", "원인: 은닉층 없는 선형 결합"),
+    ("GOAL2_route29", "10-08", "route29_bidir_lat", "goal_only", "GOAL1 + 은닉층 256-256 (`--hidden 256,256`)", "정방향 96%, 반대 100%, 빼둔 지역/혼동 통로 100%", "✅ 500k", "판정: 양방향 ≥ 80%, 체크포인트마다 분기점 바뀜 ≥ 50%"),
+    ("GOAL2_route29_seed1", "10-08", "route29_bidir_lat", "goal_only", "GOAL2, 시드 1, 수정 코드 (시드 연결 + 리셋 첫 관찰)", "정방향 96/100/96%, 반대 100%, 빼둔 지역 71%, 10칸+ 69%", "✅ 500k", "판정: 양방향 ≥ 80% (주 지표만)"),
+    ("A_NM1B_route30rev", "10-08", "route30_rev_demo_ge", "goal_only", "[A] GOAL2 초기 + Go-Explore 경로(BFS 없음)로 역방향 커리큘럼, 처음 보는 30번도로 돌아오는 길", "고정 출발 100% (10만부터), 경로 밖 1-2/3-5/6-9/10+ = 100/88/81/34%", "✅ 200k", "판정: 고정 출발 80% 처음 도달 스텝 (≤ 10만)"),
+    ("A_NMD_route30rev", "10-08", "route30_rev_demo", "goal_only", "[A] NM1-B와 같고 시연만 BFS (비교 기준선)", "고정 출발 100% (10만부터), 경로 밖 100/88/88/100% (전체 94%)", "✅ 200k", "판정: NM1-B ≤ NM_D × 1.5 스텝이면 Go-Explore가 BFS 대체"),
+    ("A_NM1B_route30rev_seed1", "10-09", "route30_rev_demo_ge", "goal_only", "[A] NM1-B, PPO 시드 1 (같은 Go-Explore 경로)", "고정 출발 100% (5만부터), 경로 밖 100/88/84/91% (전체 91%)", "✅ 200k", "판정: final 고정 출발 ≥ 80% (재현)"),
+    ("A_NM3_route30rev", "10-09", "route30_rev_demo_ge", "goal_only", "[A] NM1-B와 같고 랜덤 초기 (GOAL2 없이) — 전이 효과 확인", "고정 출발 100% (5만부터), 경로 밖 100% 전부 → 전이 효과 안 보임", "✅ 200k", "판정: NM1-B보다 80% 도달 2배 이상 느리면 전이 있음"),
+    ("A_NM1B_cherrygroverev", "10-09", "cherrygrove_rev_demo_ge", "goal_only", "[A] 두 번째 구간 (새 목표 29번도로), GOAL2 초기 + Go-Explore 경로", "고정 출발 100% (30걸음), 경로 밖 30%", "✅ 200k", "판정: final 고정 출발 ≥ 80% (두 시드)"),
+    ("A_NM1B_cherrygroverev_seed1", "10-09", "cherrygrove_rev_demo_ge", "goal_only", "[A] 위와 같고 시드 1", "고정 출발 100% (30걸음), 경로 밖 38%", "✅ 200k", "판정: final 고정 출발 ≥ 80%"),
+    ("M2A_multi", "10-09", "m2a_multi", "goal_only", "[B] 구간 11개 정책 하나, GOAL2 초기, fast-battle", "11구간 중 10개 100%, route30 48~56% (출발 칸에서 무궁시티로 되돌아감)", "⚠️ 2M", "판정: 11개 구간 모두 실제 출발 ≥ 80% (평균 + 최악 구간)"),
+    ("M2A_r30", "10-10", "m2a_multi_r30", "goal_only", "[B] M2A final에서 이어서, route30을 3배 자주 뽑음 (출발 칸 되돌아감 고치기)", "11구간 모두 길 찾기 실패 ≤ 4% (route30 90%, 실패는 전멸뿐)", "✅ 300k", "판정: route30 길 찾기 실패 ≤ 20% + 나머지 10구간 유지"),
+    ("A_NM3_cherrygroverev", "10-10", "cherrygrove_rev_demo_ge", "goal_only", "[A] cherrygrove_rev 랜덤 초기 (경로 밖 약한 원인 가르기)", "고정 출발 100%, 경로 밖 88% (GOAL2 초기 30~38%)", "✅ 200k", "판정: 경로 밖 전체가 NM1-B 최고(38%)보다 20%p 이상 높으면 GOAL2 초기 탓"),
+    ("A_NM3_route30rev_seed1", "10-10", "route30_rev_demo_ge", "goal_only", "[A] NM3 시드 1 (랜덤 초기 일반화 재현)", "고정 출발 100%, 경로 밖 100%", "✅ 200k", "판정: 고정 출발 ≥ 80% + 경로 밖 ≥ 90%"),
+    ("M2A_multi_seed1", "10-10", "m2a_multi", "goal_only", "[B] M2A 레시피 재현 1단계 (GOAL2 시드1 초기, 시드 1)", "M2A_r30_seed1의 재료 (완료)", "✅ 2M", "M2A_r30_seed1의 재료"),
+    ("M2A_r30_seed1", "10-10", "m2a_multi_r30", "goal_only", "[B] M2A 레시피 재현 2단계 (route30 3배)", "11구간 길 찾기 실패 0% (실패는 전멸뿐), 통합 실행 19/20", "✅ 300k", "판정: 11구간 실패 ≤ 20% + 통합 실행 ≥ 18/20"),
+    ("M2B_multi", "10-10", "m2b_multi", "goal_only", "[B] M2a 11 + M2b 5구간 (도라지시티·체육관), M2A_r30에서 이어서, auto_event, 40만부터 PP 0 처리", "학습 중", "⏳ 1M", "판정: 새 5구간 + 기존 11구간 실패 ≤ 20%, 통합 실행 (도라지체육관까지) ≥ 16/20"),
+]
+
+# (파일 이름, 날짜, 제목, 분류, 내용)
+EVENTS = [
+    ("2026-10-10_rtc_wallclock", "10-10", "게임 시계가 실제 시각을 따라감 → 실행 시각마다 시간대(야생 포켓몬)가 다름", "발견",
+     "PyBoy RTC = 컴퓨터 시각 기준. M2A_r30 통합 실행 10/10(게임 밤) → 26/30(게임 아침~낮), 같은 시드도 재현 안 됨. rtc_lock_experimental로 고정 가능. 평가 조건에 게임 시각 기록 필요"),
+    ("2026-10-10_m2a_done", "10-10", "M2a 완료: 집 → 할아버지 집 → 연구소 한 판 10/10", "이정표",
+     "M2A_r30 정책 하나 + 상위 계획 + 회복 + 이벤트 매크로 (train/run_story.py). 걸음 중앙값 512, 전멸 0. 규칙 걸음 판마다 8~12"),
+    ("2026-10-02_reward-hacking", "10-02", "A 실험 reward hacking", "버그",
+     "마을로 나가는 걸음에 '새 맵 +1'이 붙어서 '입구에서 몇 걸음 뒤로 나가기'가 가장 쉬운 보상이 됨 (이탈률 100%, 판 길이 5). 이탈 걸음 보상 0으로 수정 → A2. 교훈: 종료되는 그 걸음의 보상도 확인"),
+    ("2026-10-02_battle-flag", "10-02", "전투 플래그를 대화창 플래그로 착각", "버그",
+     "D21B를 전투 플래그로 골랐다가 집 안 대화창에서도 켜지는 걸 발견 → 반대 상황(대화창)에서 꺼지는지 확인해 D1D3으로 바로잡음. 교훈: 켜져야 할 때 + 꺼져야 할 때 둘 다 확인"),
+    ("2026-10-06_tap-rotation", "10-06", "tap 조작: 걸음의 56%가 제자리 회전", "발견",
+     "DEMO가 0%였던 원인. 보고 있는 방향과 다르면 몸만 돎. 1칸 조작(--move tile)으로 0 → 88~100%"),
+    ("2026-10-07_nb-init29-crash", "10-07", "NB_init29 프로세스가 7.4만에서 꺼짐", "환경",
+     "final.zip 없이 종료 (창 닫힘/강제 종료 추정). 판정 기준이 5만 체크포인트라 영향 없음, 최종 평가는 live.zip(약 7.4만)"),
+    ("2026-10-07_menu-residual", "10-07", "전투 매크로: 기술 선택 직후 메뉴 블록 잔존", "버그",
+     "기술을 고른 직후에도 메뉴 값이 남아 '거절됨'으로 오판 → B를 눌러 기술 선택 취소 → 기술 1만 써도 승리 0%. B를 누르지 않게 수정 → 기술 1 매크로 = A 연타 완전 일치"),
+    ("2026-10-07_fstring", "10-07", "진단 코드 f-string 줄바꿈 오류 (2번)", "버그",
+     "셸 heredoc으로 파이썬 코드를 고칠 때 '\\n'이 실제 줄바꿈으로 들어가 문법 오류 → 경로 밖 진단이 안 돌고 재실행. 이후 수정 스크립트는 파일로 써서 실행"),
+    ("2026-10-07_late-encounter", "10-07", "늦게 시작되는 인카운터", "버그",
+     "야생 전투는 걸음 뒤 약 150~170프레임에 전투 모드가 켜짐. 기다림이 짧으면 '곧 전투' 상태를 정상 칸 상태로 저장 → 그 칸에서 모든 방향이 전투 → 탐색이 막다른 곳으로 오판 (30번도로 18칸에서 멈춤), 시연 상태가 전투 중. SETTLE = 240으로 통일. route29 기존 데이터 시연 1/103, 경로 밖 12/483 해당 → 평가 비교 유지 위해 그대로"),
+    ("2026-10-07_cherrygrove-hp", "10-07", "이어 붙인 시작 상태가 HP를 물려받음 → 해결", "데이터",
+     "cherrygrove 시작 HP 10/20 → --harvest --avoid-battles로 16. 예전 파일 *_hp10.state 백업"),
+    ("2026-10-07_sleep", "10-07", "컴퓨터 절전으로 진단이 몇 시간 멈춤", "환경",
+     "17:48~20:10, 그리고 밤사이 다시. 작업자 CPU 누적 430초뿐. 절전 방지(session_idle)는 세션이 5분 조용하면 풀림 → 긴 작업은 턴 안에서 확인하며 기다리거나 전원 설정 필요"),
+    ("2026-10-08_reproducibility", "10-08", "커리큘럼 난수 시드 미연결 + resume이 live.zip을 고를 수 있음 (외부 검토)", "버그",
+     "DemoReverseEnv의 self.rng가 시드 없는 default_rng → 같은 --seed라도 시작 위치 순서가 달랐음. self.np_random(gymnasium 시드)으로 연결. 또 --resume latest가 live.zip을 고를 수 있었고, 강제 종료 시 모델(최대 5만 스텝 전)과 전선(최신)이 어긋남 → 정식 체크포인트만 + demo_ptr_history.jsonl로 그 스텝 시점 전선 복원. 지난 결과는 '같은 조건 성능 재현'으로 유효, GOAL1까지 예전 조건. 시험: 같은 시드 시작 순서 일치, 다른 시드 다름"),
+    ("2026-10-08_linear-goal", "10-08", "GOAL1 실패: 목표 입력이 은닉층 없이 선형으로만 들어감", "발견",
+     "net_arch=[] (CnnPolicy와 같은 모양 유지 결정)이라 목표는 모든 화면에 같은 쏠림만 줄 수 있었음 → 화면 × 목표 상호작용 불가. 목표 사용이 체크포인트마다 100% ↔ 18%로 출렁, 정방향 0%. --hidden 옵션 추가, GOAL2로 검증. 교훈: 새 입력이 어떻게 쓰여야 하는지(상수 쏠림 vs 상호작용) 먼저 따지기"),
+    ("2026-10-08_stale-first-obs", "10-08", "리셋 직후 첫 관찰이 직전 화면 (목표 바꿔치기 시험 무효)", "버그",
+     "세이브 상태를 불러와도 다음 프레임을 그려야 화면이 바뀜 → 판의 첫 관찰 = 직전 판 마지막 화면. 학습/진단은 판당 첫 걸음만 영향. goal_probe는 리셋만 반복해서 모든 칸이 같은 화면으로 시험됨 → 지금까지 목표 바꿔치기 값 무효 (같은 12%/18%가 반복된 단서로 발견). GoldEnv.reset에 1프레임 그리기 추가, 다시 잰 결과 GOAL1도 분기점 56~62% → 선형 결합 가설 근거 약해짐. 교훈: 서로 다른 모델이 같은 숫자를 내면 측정 버그부터 의심"),
+    ("2026-10-08_story-events", "10-08", "M2a 스토리 이벤트 3개가 탐색을 막음 (할아버지 집, 공박사 전화, 라이벌)", "발견",
+     "자동 이벤트 중엔 조작이 잠겨서 BFS가 그 칸 너머로 못 감 (1칸 → 42칸 → 421칸 / 179칸 → 195칸). A를 누르며 매번 '움직여지나'를 세이브로 시험해 끝을 감지 → 이벤트 뒤 상태 저장. A만 계속 누르면 앞 NPC에게 다시 말 거는 함정. 라이벌전에서 트레이너 전투 모드 = 2 확인, 트레이너 전투 상태 첫 확보 (30번도로 트레이너 미해결 문제의 대안). notes/07_m2a_story.md"),
+    ("2026-10-07_trainer-missing", "10-07", "30번도로 트레이너 전투 상태를 못 찾음", "미해결",
+     "378칸 × 4방향 + A로 대화 넘기기 → 전투 모드 0만. 후보 원인: 시야가 탐색 범위 밖 / 대화 중 조작 잠김으로 탐색이 못 가는 칸 처리 / 트레이너 전투 모드 값 미검증. 다음: ROM 맵 오브젝트 데이터로 트레이너 위치/시야"),
+]
+
+
+def env_config(name):
+    f = REPO / "models" / name / "env_config.json"
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def model_card(row):
+    name, date, env, reward, changed, result, status, memo = row
+    cfg = env_config(name)
+    files = sorted(p.name for p in (REPO / "models" / name).glob("*.zip")) if (REPO / "models" / name).exists() else []
+    flags = (f"조작 {cfg.get('move_mode', 'tap')}, 기억 {'O' if cfg.get('obs_memory') else 'X'}, "
+             f"목표 {'O' if cfg.get('obs_goal') else 'X'}, 시드 {cfg.get('seed', 0)}"
+             + (f", 시작 가중치 {cfg['init']}" if cfg.get("init") else ""))
+    return f"""# {name}
+
+> 모델 카드. 이 모델의 설정, 결과, 상태를 여기에 계속 갱신 (아래 '갱신 기록'에 날짜와 한 줄)
+
+| 항목 | 내용 |
+|---|---|
+| 상태 | {status} |
+| 시작 | 2026-{date} |
+| 환경 / 커리큘럼 | `{env}` |
+| 보상 | {reward} |
+| 바꾼 것 (직전 실험 대비) | {changed} |
+| 설정 (env_config.json) | {flags} |
+| 결과 | {result} |
+| 판정 / 메모 | {memo} |
+| 파일 | `models/{name}/` ({", ".join(files) or "없음"}) |
+| 자세한 기록 | `notes/04_experiments.md`의 {name.replace('_route29', '')} 블록 |
+
+## 갱신 기록
+- 2026-10-08: 카드 생성 (기존 기록에서 옮김)
+"""
+
+
+def main():
+    (ROOT / "models").mkdir(exist_ok=True)
+    (ROOT / "events").mkdir(exist_ok=True)
+    for row in MODELS:
+        f = ROOT / "models" / f"{row[0]}.md"
+        if not f.exists():
+            f.write_text(model_card(row), encoding="utf-8")
+    lines = ["# 모델 카드 목록", "", "> 모델마다 파일 하나. 새 모델은 `progress/make_docs.py`의 MODELS에 한 줄 추가 후 실행 (있는 카드는 안 덮어씀)", "",
+             "| 모델 | 시작 | 상태 | 결과 |", "|---|---|---|---|"]
+    lines += [f"| [{r[0]}]({r[0]}.md) | {r[1]} | {r[6]} | {r[5]} |" for r in MODELS]
+    (ROOT / "models" / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    for slug, date, title, kind, body in EVENTS:
+        f = ROOT / "events" / f"{slug}.md"
+        if not f.exists():
+            f.write_text(f"# {title}\n\n- 날짜: 2026-{date}\n- 분류: {kind}\n\n## 내용\n{body}\n\n## 갱신 기록\n- 2026-10-08: 파일 생성\n",
+                         encoding="utf-8")
+    lines = ["# 특이사항 목록", "", "> 사건마다 파일 하나 (버그, 발견, 환경 문제, 미해결)", "", "| 날짜 | 분류 | 사건 |", "|---|---|---|"]
+    lines += [f"| {e[1]} | {e[3]} | [{e[2]}]({e[0]}.md) |" for e in reversed(EVENTS)]
+    (ROOT / "events" / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"모델 카드 {len(MODELS)}개, 특이사항 {len(EVENTS)}개")
+
+
+if __name__ == "__main__":
+    main()

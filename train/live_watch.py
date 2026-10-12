@@ -158,6 +158,8 @@ def main():
     env_kwargs["move_mode"] = cfg.get("move_mode", "tap")
     env_kwargs["obs_memory"] = cfg.get("obs_memory", False)   # 짧은 기억 모델이면 관찰 모양도 맞춰야 함
     env_kwargs["obs_goal"] = cfg.get("obs_goal", False)       # 목표 정보 모델이면 관찰에 목표도
+    env_kwargs["fast_battle"] = cfg.get("fast_battle", False)
+    env_kwargs["auto_event"] = cfg.get("auto_event", False)
     if demo:
         env = DemoReverseEnv(render_mode="human", **demo, **env_kwargs)
         ptr_file = Path("runs/curriculum") / args.name / "demo_ptr.json"   # 학습 콜백이 전선을 당길 때마다 씀

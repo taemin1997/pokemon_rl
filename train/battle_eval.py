@@ -61,11 +61,14 @@ def _random_decide(rng):
 DECIDERS = {
     "move1": lambda rng: (lambda pb: "move1"),
     "move2": lambda rng: (lambda pb: "move2"),
+    "move3": lambda rng: (lambda pb: "move3"),
     "run": lambda rng: (lambda pb: "run"),
     "random": _random_decide,
     "best": lambda rng: battle.decide_best_move,   # B2 규칙: 기대 데미지 최대 기술 (ROM 표)
 }
-POLICIES = ["mash", *DECIDERS]
+# auto: 학습/통합 실행이 실제로 쓰는 자동 전투 (envs.battle.auto_battle = A 연타 + 1번 PP 0이면 PP 남은 공격 기술)
+#   mash와 같은 타이밍이라 1번 PP가 남은 전투는 판별로 결과가 같아야 함 (10-12 PP 수정 확인용)
+POLICIES = ["mash", "auto", *DECIDERS]
 
 
 def run_battle(pb, state, policy, rng):
@@ -86,6 +89,10 @@ def run_battle(pb, state, policy, rng):
             prev_menu = menu
             frames += mash_step(pb)
             lowest = min(lowest, mm.read_party_hp_total(pb))
+    elif policy == "auto":
+        out = battle.auto_battle(pb, wait=20, max_frames=MAX_FRAMES)
+        frames, lowest = out["frames"], min(lowest, out["min_hp"])
+        actions = ["pp_switch"] if out["pp_switch"] else []
     else:
         decide = DECIDERS[policy](rng)
 
@@ -93,7 +100,7 @@ def run_battle(pb, state, policy, rng):
             nonlocal lowest
             lowest = min(lowest, mm.read_party_hp_total(pb_))
             return decide(pb_)
-        out = battle.run_battle(pb, watch)
+        out = battle.run_battle(pb, watch, max_frames=MAX_FRAMES)
         frames, turns, rejected, actions = out["frames"], out["turns"], out["rejected"], out["actions"]
         lowest = min(lowest, mm.read_party_hp_total(pb))
     # 전투가 끝나고 필드로 돌아오는 연출이 끝나게 조금 더 흘림
@@ -116,7 +123,10 @@ def main():
     parser.add_argument("segment")
     parser.add_argument("policies", nargs="+", choices=POLICIES)
     parser.add_argument("--runs", type=int, default=5, help="전투 시작 상태당 판 수")
+    parser.add_argument("--max-frames", type=int, default=6000, help="전투 하나 상한 (트레이너 전투는 문구가 길어서 20000 권장)")
     args = parser.parse_args()
+    global MAX_FRAMES
+    MAX_FRAMES = args.max_frames
 
     folder = Path("states/battles") / args.segment
     index = json.loads((folder / "index.json").read_text())

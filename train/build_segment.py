@@ -41,6 +41,8 @@ from pathlib import Path
 from pyboy import PyBoy
 
 from envs import memory_map as mm
+from envs.heal import can_move
+from envs.menu import run_event
 from envs.segments import SEGMENTS
 
 DIRS = ["up", "down", "left", "right"]
@@ -54,7 +56,10 @@ SETTLE = 240
 class Explorer:
     """PyBoy 하나로 세이브 상태 저장/불러오기 + 한 걸음 이동"""
 
-    def __init__(self, start_state):
+    def __init__(self, start_state, trainers=False):
+        # trainers: 트레이너 시야에 걸리면 대화+전투를 넘기고 그 칸을 지나갈 수 있는 칸으로 봄 (envs.menu.run_event)
+        self.trainers = trainers
+        self.trainer_fights = 0
         self.pb = PyBoy("roms/gold_rom.gb", window="null")
         self.pb.set_emulation_speed(0)
         with open(start_state, "rb") as f:
@@ -101,6 +106,12 @@ class Explorer:
             self.move(direction, idle)
             if settle:
                 self.pb.tick(settle, False)
+            if self.trainers and (mm.read_byte(self.pb, mm.BATTLE_MODE) == 2 or
+                                  (not mm.in_battle(self.pb) and not can_move(self.pb))):
+                # 트레이너 시야 (또는 다른 자동 이벤트)에 걸림 → A로 대화+전투+뒷대화를 넘김. 지면 집/센터로 가서 구간 밖이 됨
+                run_event(self.pb)
+                self.trainer_fights += 1
+                return self.pos()
             if not mm.in_battle(self.pb):
                 return self.pos()
         return None
@@ -121,7 +132,7 @@ class Explorer:
 
 def explore(seg):
     """앞으로 BFS → (states, edges)"""
-    ex = Explorer(seg.start_state)
+    ex = Explorer(seg.start_state, trainers=seg.trainers)
     area = set(map(tuple, seg.allowed_maps))
     goals = set(map(tuple, seg.goal_maps))
 
@@ -229,7 +240,7 @@ def walk_to_goal(seg, avoid_battles=False, on_tile=None):
         adj.setdefault(tuple(e[:4]), []).append(tuple(e[4:]))
     goals = set(map(tuple, seg.goal_maps))
 
-    ex = Explorer(seg.start_state)
+    ex = Explorer(seg.start_state, trainers=seg.trainers)
     blocked = 0
     last = None
     for step in range(2000):
@@ -255,7 +266,8 @@ def walk_to_goal(seg, avoid_battles=False, on_tile=None):
             else:
                 # 맵이 바뀌는 이동: 네 방향을 시험해서 그 맵으로 가는 방향을 찾음
                 state = ex.snap()
-                d = next((dd for dd in DIRS if ex.try_move(state, dd) == nxt), None)
+                # settle: 계단/문은 맵 전환 연출이 끝나야 좌표가 바뀜 (house2f 계단에서 못 찾았음, 10-08)
+                d = next((dd for dd in DIRS if ex.try_move(state, dd, settle=SETTLE) == nxt), None)
                 ex.load(state)
             if d is None:
                 continue

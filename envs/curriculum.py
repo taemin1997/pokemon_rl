@@ -517,9 +517,15 @@ class DemoReverseEnv(GoldEnv):
         self.window = window
         self.real_start_prob = real_start_prob
         self.ptr = self.demo_len - 1   # 처음 전선: 목표 1걸음 앞. 콜백이 set_ptr로 바꿈
-        self.rng = np.random.default_rng()
+        # 시작 위치를 고르는 난수: 예전엔 np.random.default_rng()(시드 없음)라서 --seed가 같아도 매번 달랐음
+        #   → 10-08부터 gymnasium 환경 난수(self.np_random)를 씀. 학습 스크립트의 env.seed(시드 + 환경 번호)가 여기까지 이어짐
+        #   (외부 검토 지적. 이전 실험의 "같은 조건에서 성능 재현"은 유효하고, "학습 과정 비트 단위 재현"이 이번에 생김)
         self.current = None            # 이번 판 시연 번호 (None = 실제 시작)
         self._results = []             # (시작 번호, 도착 여부). 콜백이 pop_results로 가져감
+
+    @property
+    def rng(self):
+        return self.np_random
 
     # 콜백이 env_method로 부르는 것들 -------------------------------
     def set_ptr(self, ptr):
@@ -657,4 +663,118 @@ class LateralDemoEnv(DemoReverseEnv):
             info["demo_front"] = self.demo_len - self.ptr
             info["lat_start"] = self.lateral
         info["lat_radius"] = self.radius
+        return info
+
+
+class MultiSegmentEnv(GoldEnv):
+    """여러 구간을 정책 하나로 (M2a: 집 → 할아버지 집 → 연구소). **판마다 구간을 뽑음**
+
+    왜 새로 만드나 (GOAL2의 route29_bidir_lat과 차이)
+    - route29_bidir_lat은 환경 i가 구간 하나를 맡음 (6개 환경, 2구간 → 3개씩). 구간이 7~8개면 환경이 모자람
+    - 여기선 환경 하나가 모든 구간 데이터(시연, 경로 밖 상태, 거리표, 목표)를 들고 있다가 판 시작마다 구간을 고름
+      → 구간 수와 환경 수가 무관. PyBoy는 환경당 하나 (구간마다 따로 띄우면 메모리가 너무 큼)
+    - 구간별 전선/폭은 콜백이 모든 환경에 같은 값으로 보냄 (MultiSegCurriculumCallback)
+
+    판 시작 (구간 하나 안에서는 LateralDemoEnv와 같은 규칙)
+    - 구간 선택: weights (기본 균등)
+    - real_start_prob → 그 구간의 실제 시작 상태 / lateral_prob → 경로 밖 칸 / 나머지 → 시연 전선 [ptr, ptr + window]
+    - 구간을 바꿀 때 바뀌는 것: 허용 맵, 목표 맵, 관찰의 목표 칸, 거리표(진단용), 판 길이
+    """
+
+    def __init__(self, segments, real_start_prob=0.1, lateral_prob=0.25, window=4, weights=None, **kwargs):
+        from envs.gold_env import GOAL_GROUPS, GOAL_NUMBERS
+        from envs.offpath_tiles import eval_holdout_tiles, in_holdout
+        from envs.segments import SEGMENTS
+
+        names = list(segments)
+        first = SEGMENTS[names[0]]
+        super().__init__(**{**first.env_kwargs(), **kwargs})
+        self.real_start_prob, self.lateral_prob, self.window = real_start_prob, lateral_prob, window
+        self.seg_names = names
+        self.weights = np.array(weights if weights else [1.0] * len(names), dtype=float)
+        self.segs = {}
+        for n in names:
+            seg = SEGMENTS[n]
+            demo = pickle.loads(Path(seg.demo_path).read_bytes())
+            off = Path(seg.demo_path).with_name("offpath.pkl")
+            lat = []
+            if off.exists():
+                tiles = pickle.loads(off.read_bytes())["tiles"]
+                banned = eval_holdout_tiles(tiles)
+                lat = [(p, t["path_dist"], t["nearest_demo"], t["state"]) for p, t in tiles.items()
+                       if t["path_dist"] > 0 and p not in banned and not in_holdout(n, p)]
+            import json
+            dist = {tuple(r[:4]): r[4] for r in json.loads(Path(seg.dist_path).read_text())}
+            g = list(seg.goal_maps)[0]
+            gv = np.zeros(GOAL_GROUPS + GOAL_NUMBERS, dtype=np.float32)
+            gv[g[0]] = 1.0
+            gv[GOAL_GROUPS + g[1]] = 1.0
+            self.segs[n] = {
+                "allowed": set(map(tuple, seg.allowed_maps)), "goal": set(map(tuple, seg.goal_maps)),
+                "dist": dist, "goal_vec": gv, "max_steps": seg.max_steps,
+                "start": Path(seg.start_state).read_bytes(),
+                "demo": [zlib.decompress(z) for z in demo["states"]], "lat": lat,
+                "ptr": len(demo["states"]) - 1, "radius": 1,
+            }
+        self.cur = names[0]
+        self.kind, self.idx = None, None      # 이번 판: "real" / "demo" (시연 번호) / "lat" (path_dist)
+        self._results = []                    # (구간, 종류, 번호 또는 path_dist, 도착 여부)
+
+    @property
+    def rng(self):
+        return self.np_random   # 시드 연결 (10-08 재현성 수정과 같은 방식)
+
+    # 콜백이 env_method로 부르는 것들 ------------------------------------
+    def set_seg_ptr(self, name, ptr):
+        s = self.segs[name]
+        s["ptr"] = int(np.clip(ptr, 0, len(s["demo"]) - 1))
+
+    def set_seg_radius(self, name, r):
+        self.segs[name]["radius"] = int(r)
+
+    def seg_demo_len(self, name):
+        return len(self.segs[name]["demo"])
+
+    def pop_results(self):
+        out, self._results = self._results, []
+        return out
+
+    # -----------------------------------------------------------------
+    def _load_start(self):
+        p = self.weights / self.weights.sum()
+        self.cur = self.seg_names[int(self.rng.choice(len(self.seg_names), p=p))]
+        s = self.segs[self.cur]
+        self.allowed_maps, self.goal_maps, self.dist = s["allowed"], s["goal"], s["dist"]
+        self.goal_vec, self.max_steps = s["goal_vec"], s["max_steps"]
+        u = self.rng.random()
+        if u < self.real_start_prob:
+            self.kind, self.idx = "real", None
+            self.pyboy.load_state(io.BytesIO(s["start"]))
+            return
+        if u < self.real_start_prob + self.lateral_prob and s["lat"]:
+            cand = [c for c in s["lat"] if c[2] >= s["ptr"] and c[1] <= s["radius"]]
+            outer = [c for c in cand if c[1] == s["radius"]]
+            inner = [c for c in cand if c[1] < s["radius"]]
+            if outer and (not inner or self.rng.random() < 0.5):
+                cand = outer
+            elif inner:
+                cand = inner
+            if cand:
+                _, pd, _, state = cand[self.rng.integers(len(cand))]
+                self.kind, self.idx = "lat", pd
+                self.pyboy.load_state(io.BytesIO(zlib.decompress(state)))
+                return
+        hi = min(s["ptr"] + self.window, len(s["demo"]) - 1)
+        self.kind, self.idx = "demo", int(self.rng.integers(s["ptr"], hi + 1))
+        self.pyboy.load_state(io.BytesIO(s["demo"][self.idx]))
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        if terminated or truncated:
+            self._results.append((self.cur, self.kind, self.idx, bool(self.reached_goal)))
+        return obs, reward, terminated, truncated, info
+
+    def _get_info(self):
+        info = super()._get_info()
+        info["segment"] = getattr(self, "cur", None)
         return info

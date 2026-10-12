@@ -12,7 +12,7 @@
 ```bash
 uv run python -m train.train_ppo --env <구간> --reward <보상> --name <실험> --resume latest --total-steps <누적 목표>
 ```
-- `--resume latest`: 그 실험 폴더에서 **가장 최근 파일**을 자동으로 고름 (final이든 체크포인트든)
+- `--resume latest`: 그 실험 폴더에서 **가장 최근 정식 저장본**(final.zip 또는 ppo_*_steps.zip, live.zip 제외, 10-08)을 고름. 전선 상태도 그 모델 스텝 시점으로 복원 (`demo_ptr_history.jsonl`, 10-08 이후 학습부터)
 - `--total-steps`: **누적 목표**. 이미 학습한 만큼 빼고 남은 만큼만 학습함. 이미 넘었으면 학습 안 하고 알려줌
 - `--env`, `--reward`는 처음 학습할 때와 같게 줘야 함 (모델 파일엔 환경/보상 설정이 저장되지 않음)
 - TensorBoard 곡선은 같은 `runs/<실험>_N` 폴더에 이어서 그려짐
@@ -53,3 +53,10 @@ Stop-Process -Id <번호> -Force
 5. `models/`, `runs/`: 어떤 실험이 어디까지 학습됐는지 (파일 이름의 스텝 수)
 
 새 대화에서 Claude에게는 "progress/README.md 보고 이어서 하자" 정도면 됨 (프로젝트 기억에도 이 폴더 구조가 저장돼 있음)
+
+## 4. M2B_multi 학습 연쇄 (10-12 09:19 재개 기준)
+- 스크립트 (세션 scratchpad, 지워지면 아래 내용으로 다시 만들기): `m2b_train5.sh` → 로그 `runs/m2b_train5.log`, `locked_eval5.sh` → `runs/m2b_locked5.log`
+  - 학습: `train_ppo --env m2b_multi --reward goal_only --move tile --goal --hidden 256,256 --fast-battle --auto-event --resume latest --total-steps 1000000 --name M2B_multi --no-live` (로그 20분 정지 → 학습/워커 프로세스 종료 후 재시작, 최대 5번)
+  - 끝나면 평가: 새 5구간(route30_north/route31 50판) / 기존 11구간 / 경로 밖 3구간 / `run_story --targets "26,10;24,5;10,7" --max-steps 6000` 20판
+  - 시계 고정 평가: 학습 로그에 "끝"이 나오면 `POKE_RTC_LOCK=1`로 새 5구간 + M2A_r30 vs M2B 11구간 + 통합 실행 두 모델 (학습 연쇄가 "중단"이면 같이 끝남)
+- 중간에 끊기면 같은 두 스크립트를 `nohup bash`로 다시 실행하면 됨 (`--resume latest`라 마지막 체크포인트부터)

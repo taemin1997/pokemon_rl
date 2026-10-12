@@ -37,12 +37,12 @@ from pathlib import Path
 import numpy as np
 
 from envs.segments import SEGMENTS
-from train.build_segment import DIRS, Explorer
+from train.build_segment import DIRS, SETTLE, Explorer
 
 
 def explore(seg, iters, after_goal, walk, repeat, seed):
     rng = np.random.default_rng(seed)
-    ex = Explorer(seg.start_state)
+    ex = Explorer(seg.start_state, trainers=seg.trainers)
     area = set(map(tuple, seg.allowed_maps))
     goals = set(map(tuple, seg.goal_maps))
 
@@ -70,7 +70,7 @@ def explore(seg, iters, after_goal, walk, repeat, seed):
         for _ in range(walk):
             if rng.random() > repeat:
                 d = DIRS[int(rng.integers(0, 4))]
-            nxt = ex.try_move(state, d, settle=60, tries=2)   # 전투가 안 나는 타이밍을 찾아 걸음 (2번 다 전투면 None → 다른 방향)
+            nxt = ex.try_move(state, d, settle=SETTLE, tries=2)   # 전투가 안 나는 타이밍을 찾아 걸음 (2번 다 전투면 None → 다른 방향)
             moves += 1
             if nxt is None or nxt == cur:
                 continue                              # 전투만 나는 칸이거나 벽 → 다른 방향 시도

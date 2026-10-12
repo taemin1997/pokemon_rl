@@ -79,7 +79,8 @@ def run_one(job):
                    c.get("obs_goal", False) == cfg.get("obs_goal", False) for c in cfgs), "chain 모델 설정이 다름"
     move_mode = cfg.get("move_mode", "tap")
     env = GoldEnv(**{**seg.env_kwargs(), "state_path": start_path, "move_mode": move_mode,
-                     "obs_memory": cfg.get("obs_memory", False), "obs_goal": cfg.get("obs_goal", False)})
+                     "obs_memory": cfg.get("obs_memory", False), "obs_goal": cfg.get("obs_goal", False),
+                     "fast_battle": cfg.get("fast_battle", False), "auto_event": cfg.get("auto_event", False)})
     rng = np.random.default_rng(seed)
 
     model = None
@@ -97,6 +98,9 @@ def run_one(job):
     # 같은 시작 상태라도 프레임을 조금 흘려서 인카운터 타이밍이 판마다 달라지게 함
     env.pyboy.tick(int(rng.integers(0, 30)), False)
 
+    # 걸음 나누기 (외부 검토 10-08): 도착 걸음 = 칸 이동 + 막힘(방향키인데 제자리) + A/B 버튼
+    #   전투는 auto_battle이면 한 스텝 안에서 처리되므로 걸음 수에 안 들어감
+    n_move = n_blocked = n_button = 0
     done = False
     while not done:
         if chain:
@@ -107,8 +111,15 @@ def run_one(job):
             action = int(rng.integers(0, env.action_space.n))
         else:
             action, _ = model.predict(obs)
+        before = info["position"]
         obs, _, terminated, truncated, info = env.step(action)
         done = terminated or truncated
+        if int(action) >= 4:
+            n_button += 1
+        elif info["position"] != before:
+            n_move += 1
+        else:
+            n_blocked += 1
 
     result = {
         "policy": policy_label(policy),
@@ -121,6 +132,8 @@ def run_one(job):
         "battles": info["battles"],
         "exp": info["exp_gain"],
         "whiteout": info.get("whiteouts", 0) > 0,
+        "n_move": n_move, "n_blocked": n_blocked, "n_button": n_button,
+        "end_pos": list(info["position"]),   # 이탈했을 때 어디로 갔나 보려고
     }
     env.close()
     return result
@@ -150,11 +163,18 @@ def summarize(results, shortest):
                 "battles": float(np.mean([r["battles"] for r in rs])),
                 "exp": float(np.mean([r["exp"] for r in rs])),
             }
+            # 도착한 판만: 걸음 나누기 평균 (이동 / 막힘 / 버튼)
+            ok = [r for r in rs if r["goal"] and "n_move" in r]
+            if ok:
+                for k in ("n_move", "n_blocked", "n_button"):
+                    row[k + "_mean"] = float(np.mean([r[k] for r in ok]))
             rows.append(row)
             gs = f"{row['goal_step_mean']:.0f}" if steps else "-"
             print(f"{policy:<30}{start:<12}{row['goal_rate']:>7.0%}{gs:>10}"
                   f"{row['progress_p50']:>8.0f} / {row['progress_p90']:<3.0f}/ {row['progress_max']:<4}{row['left_rate']:>6.0%}{row['whiteout_rate']:>6.0%}"
                   f"{row['battles']:>6.1f}{row['exp']:>7.0f}")
+            if "n_move_mean" in row:
+                print(f"{'':<42}도착 판 걸음 나누기: 이동 {row['n_move_mean']:.1f} / 막힘 {row['n_blocked_mean']:.1f} / A·B {row['n_button_mean']:.1f}")
     return rows
 
 

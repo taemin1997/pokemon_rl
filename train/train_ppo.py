@@ -34,7 +34,8 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from envs.curriculum import ArchiveCurriculumEnv, DemoReverseEnv, FrontierArchiveEnv, LateralDemoEnv, ReverseCurriculumEnv
+from envs.curriculum import (ArchiveCurriculumEnv, DemoReverseEnv, FrontierArchiveEnv, LateralDemoEnv, MultiSegmentEnv,
+                              ReverseCurriculumEnv)
 from envs.gold_env import GoldEnv
 from envs.segments import SEGMENTS
 
@@ -142,6 +143,34 @@ CURRICULUM_PRESETS = {
         "parts": ["route29", "route29_rev"],
         "_class": "multi_lat",
     },
+    # M2a: 집 → 할아버지 집 → 연구소, 구간 8개를 정책 하나로. 판마다 구간을 뽑음 (MultiSegmentEnv)
+    #   이벤트(할아버지 집, 전화, 라이벌, 연구소)는 구간 경계의 비계 (notes/07). 목표 정보 필수 (--goal --hidden)
+    #   route29_rev 시작 상태는 이벤트 전 (GOAL 학습용과 같은 데이터). 길은 같음
+    "m2a_multi": {
+        "base": "newbark",
+        # house2f: 전멸 부활 위치(집 2층)에서 출발하는 구간 (전멸 대응, 10-08)
+        # cherrygrove_pc / _exit: 회복 규칙용 (새 마을 첫 도착 또는 HP 절반 미만이면 센터, 10-08)
+        "parts": ["house2f", "newbark", "route29", "cherrygrove", "cherrygrove_pc", "cherrygrove_pc_exit", "route30",
+                  "route30_rev", "cherrygrove_rev", "route29_rev", "newbark_lab"],
+        "_class": "multi_seg",
+    },
+    # M2B (10-10): M2a 11구간 + M2b 5구간 (30번도로 → 31번도로 → 도라지시티 → 체육관/센터). 새 길 3개는 2배 자주
+    "m2b_multi": {
+        "base": "newbark",
+        "parts": ["house2f", "newbark", "route29", "cherrygrove", "cherrygrove_pc", "cherrygrove_pc_exit", "route30",
+                  "route30_rev", "cherrygrove_rev", "route29_rev", "newbark_lab",
+                  "route30_north", "route31", "violet_gym", "violet_pc", "violet_pc_exit"],
+        "weights": [1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 2, 2, 2, 1, 1],
+        "_class": "multi_seg",
+    },
+    # M2A 이어 학습 (10-10): route30만 실패 (출발 칸에서 무궁시티로 되돌아감) → route30을 3배 자주 뽑음. 나머지 같음
+    "m2a_multi_r30": {
+        "base": "newbark",
+        "parts": ["house2f", "newbark", "route29", "cherrygrove", "cherrygrove_pc", "cherrygrove_pc_exit", "route30",
+                  "route30_rev", "cherrygrove_rev", "route29_rev", "newbark_lab"],
+        "weights": [1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1],
+        "_class": "multi_seg",
+    },
 }
 
 
@@ -170,10 +199,21 @@ for _name, _seg in SEGMENTS.items():
         "_class": "demo",
     })
 
+# Go-Explore 시연이 있는 구간은 --env <구간>_demo_ge 도 자동으로 (BFS 없이 찾은 경로로 같은 역방향 시연 커리큘럼, 트랙 A)
+for _name, _seg in SEGMENTS.items():
+    _ge = Path(_seg.demo_path).with_name("demo_goexplore.pkl")
+    CURRICULUM_PRESETS.setdefault(f"{_name}_demo_ge", {
+        "base": _name,
+        "demo_path": str(_ge),
+        "real_start_prob": 0.1,
+        "window": 4,
+        "_class": "demo",
+    })
+
 # info에 있으면 에피소드 끝날 때 TensorBoard에 기록할 진행 지표들
 GAME_METRICS = [
     "visited_tiles", "visited_maps", "badges",
-    "battles", "exp_gain", "reached_goal", "left_area", "progress", "dist_best", "shaping_sum", "goal_step", "whiteouts",
+    "battles", "exp_gain", "reached_goal", "left_area", "progress", "dist_best", "shaping_sum", "goal_step", "whiteouts", "events",
     "rc_pool", "rc_far", "rc_anchors", "real_goal", "start_dist",  # 커리큘럼: 후보 풀 크기, 실제 시작에서 시작한 판의 도착률
     "demo_start",  # 역방향 시연: 이번 판 시작이 경로상 목표에서 몇 걸음 앞이었나
     "lat_start",   # 경로 옆 시작(LAT1): 경로 밖 시작 판의 경로에서 거리
@@ -185,6 +225,33 @@ def load_env_config(model_dir):
     모델 .zip엔 환경 설정이 안 들어가서, 평가/라이브가 학습과 다른 조건으로 돌지 않게 따로 저장함"""
     f = Path(model_dir) / "env_config.json"
     return json.loads(f.read_text()) if f.exists() else {}
+
+
+def load_curriculum_state(save_path, model_steps):
+    """이어서 학습할 때 전선 상태를 모델 스텝 시점으로 맞춤 (10-08)
+
+    왜: 학습이 강제로 꺼지면 모델은 마지막 체크포인트(최대 5만 스텝 전)로 돌아가는데,
+        demo_ptr.json은 꺼지기 직전 전선이라 둘이 어긋남 (모델은 아직 못 배운 곳이 전선이 됨)
+    방법: 전선을 바꿀 때마다 demo_ptr_history.jsonl에 (스텝, 상태)를 한 줄씩 쌓고,
+          이어서 할 때 모델 스텝 이하인 마지막 줄을 씀. 기록이 없으면(예전 실험) demo_ptr.json 그대로
+    """
+    hist = Path(save_path).with_name("demo_ptr_history.jsonl")
+    if hist.exists() and model_steps:
+        rows = [json.loads(line) for line in hist.read_text().splitlines() if line.strip()]
+        rows = [r for r in rows if r["steps"] <= model_steps]
+        if rows:
+            print(f"[전선 복원] 모델 {model_steps:,}스텝 시점 전선 (기록 {rows[-1]['steps']:,}스텝)")
+            return rows[-1]["state"]
+    if Path(save_path).exists():
+        return json.loads(Path(save_path).read_text())
+    return None
+
+
+def save_curriculum_state(save_path, state, steps):
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(save_path).write_text(json.dumps(state))
+    with open(Path(save_path).with_name("demo_ptr_history.jsonl"), "a") as f:
+        f.write(json.dumps({"steps": steps, "state": state}) + "\n")
 
 
 class GameStatsCallback(BaseCallback):
@@ -260,8 +327,8 @@ class DemoCurriculumCallback(BaseCallback):
         self.ptr = self.n - 1   # 처음: 목표 1걸음 앞
         self.lateral = venv.get_attr("lateral_prob", [0])[0] if venv.has_attr("lateral_prob") else None
         self.radius = 1
-        if self.save_path.exists():
-            saved = json.loads(self.save_path.read_text())
+        saved = load_curriculum_state(self.save_path, self.model.num_timesteps)
+        if saved:
             self.ptr = saved["ptr"]
             self.radius = saved.get("radius", 1)
             print(f"[시연 전선] 이어서: 목표에서 {self.n - self.ptr}걸음 앞부터 (경로 밖 폭 {self.radius})")
@@ -299,8 +366,73 @@ class DemoCurriculumCallback(BaseCallback):
                 self.training_env.env_method("set_radius", self.radius)
                 changed = True
         if changed:
-            self.save_path.parent.mkdir(parents=True, exist_ok=True)
-            self.save_path.write_text(json.dumps({"ptr": self.ptr, "radius": self.radius, "steps": self.num_timesteps}))
+            save_curriculum_state(self.save_path, {"ptr": self.ptr, "radius": self.radius, "steps": self.num_timesteps},
+                                  self.num_timesteps)
+
+    def _on_step(self):
+        return True
+
+
+class MultiSegCurriculumCallback(BaseCallback):
+    """MultiSegmentEnv용 (판마다 구간을 뽑는 여러 구간 학습). 구간별 전선/폭을 모든 환경에 같은 값으로
+
+    규칙은 DemoCurriculumCallback과 같음 (롤아웃마다, 24판 이상 + 도착 ≥ 50% → 전선 3칸 / 폭 +1)
+    다른 점: 결과가 환경별이 아니라 (구간, 시작 종류, 번호, 도착) 묶음으로 옴 → 구간 이름으로 모음
+    기록: game/demo_front/<구간>, game/real_goal/<구간>, game/lat_*/<구간>, game/seg_eps/<구간>(이번 롤아웃 판 수)
+    """
+
+    def __init__(self, save_path, success=0.5, min_eps=24, step_back=3, max_radius=8):
+        super().__init__()
+        self.save_path = Path(save_path)
+        self.success, self.min_eps, self.step_back, self.max_radius = success, min_eps, step_back, max_radius
+
+    def _on_training_start(self):
+        venv = self.training_env
+        names = venv.get_attr("seg_names", [0])[0]
+        self.window = venv.get_attr("window", [0])[0]
+        saved = load_curriculum_state(self.save_path, self.model.num_timesteps) or {}
+        self.state = {}
+        for n in names:
+            length = venv.env_method("seg_demo_len", n, indices=[0])[0]
+            st = saved.get(n, {})
+            self.state[n] = {"n": length, "ptr": st.get("ptr", length - 1), "radius": st.get("radius", 1),
+                             "hits": [], "lat_hits": []}
+            venv.env_method("set_seg_ptr", n, self.state[n]["ptr"])
+            venv.env_method("set_seg_radius", n, self.state[n]["radius"])
+
+    def _on_rollout_end(self):
+        venv = self.training_env
+        results = [r for rs in venv.env_method("pop_results") for r in rs]
+        changed = False
+        for n, s in self.state.items():
+            mine = [r for r in results if r[0] == n]
+            s["hits"] += [ok for _, kind, i, ok in mine if kind == "demo" and s["ptr"] <= i <= s["ptr"] + self.window]
+            s["lat_hits"] += [ok for _, kind, pd, ok in mine if kind == "lat" and pd == s["radius"]]
+            real = [ok for _, kind, _, ok in mine if kind == "real"]
+            lat = [ok for _, kind, _, ok in mine if kind == "lat"]
+            rate = sum(s["hits"]) / len(s["hits"]) if s["hits"] else 0.0
+            lat_rate = sum(s["lat_hits"]) / len(s["lat_hits"]) if s["lat_hits"] else 0.0
+            self.logger.record(f"game/demo_front/{n}", s["n"] - s["ptr"])
+            self.logger.record(f"game/demo_front_rate/{n}", rate)
+            self.logger.record(f"game/lat_radius/{n}", s["radius"])
+            self.logger.record(f"game/seg_eps/{n}", len(mine))
+            if lat:
+                self.logger.record(f"game/lat_goal/{n}", sum(lat) / len(lat))
+            if real:
+                self.logger.record(f"game/real_goal/{n}", sum(real) / len(real))
+            if len(s["hits"]) >= self.min_eps and rate >= self.success and s["ptr"] > 0:
+                s["ptr"] = max(0, s["ptr"] - self.step_back)
+                s["hits"] = []
+                venv.env_method("set_seg_ptr", n, s["ptr"])
+                changed = True
+            if len(s["lat_hits"]) >= self.min_eps and lat_rate >= self.success and s["radius"] < self.max_radius:
+                s["radius"] += 1
+                s["lat_hits"] = []
+                venv.env_method("set_seg_radius", n, s["radius"])
+                changed = True
+        if changed:
+            save_curriculum_state(self.save_path, {n: {"ptr": s["ptr"], "radius": s["radius"], "steps": self.num_timesteps}
+                                                   for n, s in self.state.items()}, self.num_timesteps)
 
     def _on_step(self):
         return True
@@ -329,7 +461,7 @@ class MultiDemoCurriculumCallback(BaseCallback):
         self.groups = {}
         for i, n in enumerate(names):
             self.groups.setdefault(n, []).append(i)
-        saved = json.loads(self.save_path.read_text()) if self.save_path.exists() else {}
+        saved = load_curriculum_state(self.save_path, self.model.num_timesteps) or {}
         self.state = {}
         for n, idx in self.groups.items():
             length = venv.get_attr("demo_len", [idx[0]])[0]
@@ -373,9 +505,8 @@ class MultiDemoCurriculumCallback(BaseCallback):
                 venv.env_method("set_radius", s["radius"], indices=idx)
                 changed = True
         if changed:
-            self.save_path.parent.mkdir(parents=True, exist_ok=True)
-            self.save_path.write_text(json.dumps({n: {"ptr": s["ptr"], "radius": s["radius"], "steps": self.num_timesteps}
-                                                  for n, s in self.state.items()}))
+            save_curriculum_state(self.save_path, {n: {"ptr": s["ptr"], "radius": s["radius"], "steps": self.num_timesteps}
+                                                   for n, s in self.state.items()}, self.num_timesteps)
 
     def _on_step(self):
         return True
@@ -405,6 +536,12 @@ def main():
     # 짧은 기억: 관찰에 "직전 버튼 + 움직였나"를 추가 (MEM 실험~). 정책이 CnnPolicy → MultiInputPolicy로 바뀜
     parser.add_argument("--memory", action="store_true", help="관찰에 직전 버튼 + 움직였나 추가")
     parser.add_argument("--goal", action="store_true", help="관찰에 목표 맵 추가 (GOAL1, 여러 구간 섞어 학습용)")
+    # 화면 특징(+기억/목표) 뒤 은닉층. 기본 없음 (= CnnPolicy와 같은 모양, 예전 실험 전부)
+    #   왜 (GOAL1, 10-08): 은닉층이 없으면 목표는 모든 화면에 같은 쏠림만 더할 수 있음
+    #   ("이 화면 + 목표 A → 서쪽, 같은 화면 + 목표 B → 동쪽"을 못 함) → 목표 사용이 오락가락하다 한 방향으로 쏠림
+    parser.add_argument("--hidden", default="", help="은닉층 크기, 쉼표로 (예: 256,256). 정책/가치 각각 같은 모양")
+    parser.add_argument("--auto-event", action="store_true", help="잠기면(트레이너 시야/대화) A로 넘김. M2b부터")
+    parser.add_argument("--fast-battle", action="store_true", help="전투 빠르게 (게임 옵션 + 연타 간격). 학습 속도용")
     # 시드: 같은 설정으로 시드만 바꿔 다시 돌려서 결과가 우연이 아닌지 확인할 때 (예: --seed 1 --name ..._seed1)
     #   새로 학습할 때만 적용. 이어서 할 땐 저장된 모델의 값 그대로
     parser.add_argument("--seed", type=int, default=0)
@@ -447,12 +584,17 @@ def main():
         args.move = saved.get("move_mode", "tap")
         args.memory = saved.get("obs_memory", False)
         args.goal = saved.get("obs_goal", False)
+        args.fast_battle = saved.get("fast_battle", False)
+        args.auto_event = saved.get("auto_event", False)
     move_mode = args.move or "tap"
-    env_config = {"move_mode": move_mode, "obs_memory": bool(args.memory), "obs_goal": bool(args.goal)}
+    env_config = {"move_mode": move_mode, "obs_memory": bool(args.memory), "obs_goal": bool(args.goal),
+                  "fast_battle": bool(args.fast_battle), "auto_event": bool(args.auto_event)}
+    hidden = [int(x) for x in args.hidden.split(",") if x.strip()]
     save_dir.mkdir(parents=True, exist_ok=True)
     # 기록용: 시드까지 같이 적어둠 (환경 설정은 env_config만 환경에 넘김)
     (save_dir / "env_config.json").write_text(json.dumps({**env_config, "seed": saved.get("seed", args.seed),
-                                                         "init": saved.get("init", args.init)}))
+                                                         "init": saved.get("init", args.init),
+                                                         "hidden": saved.get("hidden", hidden)}))
 
     # -----------------------------------------------------------
     # 1) 환경 여러 개
@@ -462,7 +604,13 @@ def main():
     #   (DummyVecEnv는 한 프로세스에서 차례로 돌려서 빨라지지 않음)
     # 커리큘럼이면 학습 환경 클래스와 설정을 바꿈. base 구간 이름은 라이브/평가에 씀
     parts = None
-    if args.env in CURRICULUM_PRESETS and CURRICULUM_PRESETS[args.env].get("_class") == "multi_lat":
+    seg_parts = None
+    if args.env in CURRICULUM_PRESETS and CURRICULUM_PRESETS[args.env].get("_class") == "multi_seg":
+        # 판마다 구간을 뽑음: 모든 환경이 같은 설정 (구간 전부를 들고 있음)
+        seg_parts = CURRICULUM_PRESETS[args.env]["parts"]
+        base_env = CURRICULUM_PRESETS[args.env]["base"]
+        env_cls, env_kwargs = MultiSegmentEnv, {"segments": seg_parts, "weights": CURRICULUM_PRESETS[args.env].get("weights")}
+    elif args.env in CURRICULUM_PRESETS and CURRICULUM_PRESETS[args.env].get("_class") == "multi_lat":
         # 여러 구간 섞기: 환경 i는 parts[i % 구간 수]를 맡음 (6개, 2구간이면 3개씩)
         parts = CURRICULUM_PRESETS[args.env]["parts"]
         base_env = CURRICULUM_PRESETS[args.env]["base"]
@@ -503,9 +651,10 @@ def main():
     # -----------------------------------------------------------
     if args.resume:
         if args.resume == "latest":
-            # 중단 방식과 상관없이 가장 최근 파일을 고름
+            # 정식 저장본만 고름: final.zip, ppo_<스텝>_steps.zip (live.zip은 라이브 창용 스냅샷이라 뺌, 10-08)
             # (Ctrl+C로 멈추면 final.zip이 생기고, 강제 종료/정전이면 마지막 체크포인트만 남음)
-            zips = list(save_dir.glob("*.zip"))
+            # 커리큘럼 전선도 그 모델의 스텝 시점 값으로 복원함 (콜백의 demo_ptr_history.jsonl)
+            zips = [p for p in save_dir.glob("*.zip") if p.name != "live.zip"]
             if not zips:
                 print(f"{save_dir}에 이어서 할 모델이 없음")
                 env.close()
@@ -524,7 +673,8 @@ def main():
             #   CNN 뒤 은닉층 없음 (MultiInputPolicy 기본은 64-64를 붙임, CnnPolicy는 안 붙임)
             #   → 기억 실험에서 바뀌는 건 "숫자 7개가 더 들어감"뿐이 되게 (한 번에 하나만 바꾸기)
             #   목표 정보(--goal)도 같은 방식: 바뀌는 건 "목표 숫자 96개가 더 들어감"뿐
-            policy_kwargs={"features_extractor_kwargs": {"cnn_output_dim": 512}, "net_arch": []} if (args.memory or args.goal) else None,
+            policy_kwargs=({"features_extractor_kwargs": {"cnn_output_dim": 512}, "net_arch": hidden}
+                           if (args.memory or args.goal) else ({"net_arch": hidden} if hidden else None)),
             # n_steps: 환경 하나당 몇 스텝 모으고 업데이트할지
             #   → 한 번 업데이트에 512 x 6 = 3072스텝 경험을 씀
             n_steps=512,
@@ -575,7 +725,9 @@ def main():
         CheckpointCallback(save_freq=max(50_000 // args.envs, 1), save_path=str(save_dir), name_prefix="ppo"),
         GameStatsCallback(),
     ]
-    if parts:
+    if seg_parts:
+        callbacks.append(MultiSegCurriculumCallback(Path("runs/curriculum") / name / "demo_ptr.json"))
+    elif parts:
         callbacks.append(MultiDemoCurriculumCallback(Path("runs/curriculum") / name / "demo_ptr.json"))
     elif issubclass(env_cls, DemoReverseEnv):
         callbacks.append(DemoCurriculumCallback(Path("runs/curriculum") / name / "demo_ptr.json"))
@@ -584,6 +736,8 @@ def main():
     # 역방향 시연이면 라이브도 전선 위치에서 시작 (실제 입구는 몇 판에 한 번)
     if not args.no_live:
         live_env = args.env if issubclass(env_cls, DemoReverseEnv) else base_env
+        if seg_parts:
+            live_env = base_env   # 여러 구간 라이브는 아직 없음 → 첫 구간 실제 시작에서 보여줌
         callbacks.append(LiveSnapshotCallback(save_dir / "live.zip"))
         subprocess.Popen([sys.executable, "-m", "train.live_watch", name, "--env", live_env, "--wait"])
         print("라이브 창: 약 1만 스텝 뒤 첫 모습이 뜸 (live.zip). 창을 닫으면 라이브만 꺼짐")

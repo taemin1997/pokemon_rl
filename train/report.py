@@ -92,7 +92,8 @@ def main():
     for m, lab in zip(args.models, labels):
         s = json.loads(run(py + ["train.goal_probe", m, *q_probe]).read_text())
         R[lab].update({"flipped": s["all"]["flipped"], "rev_top_correct": s["all"]["route29_rev"],
-                       "fwd_top_correct": s["all"]["route29"]})
+                       "fwd_top_correct": s["all"]["route29"],
+                       "branch_flipped": s.get("branch", {}).get("flipped"), "branch_tiles": s.get("branch", {}).get("tiles")})
     # 5) 교란 (선택)
     if args.perturb:
         for r in json.loads(run(py + ["train.offpath", "perturb", "route29", *args.models,
@@ -111,7 +112,8 @@ def main():
         ("혼동 통로 3칸", lambda r: pct(r.get("confused"))),
         ("막힌 직후 같은 버튼", lambda r: pct(r.get("repeat_after_block"))),
         ("최장 연속 막힘", lambda r: f"{r.get('longest_p50', 0):.0f} / {r.get('longest_max', '-')}"),
-        ("목표 바꾸면 행동 바뀜", lambda r: pct(r.get("flipped"))),
+        ("목표 바꾸면 행동 바뀜 (전체)", lambda r: pct(r.get("flipped"))),
+        ("〃 분기점만 (판정용)", lambda r: f"{pct(r.get('branch_flipped'))} ({r.get('branch_tiles', '-')}칸)"),
         ("반대 목표 맞는 방향", lambda r: pct(r.get("rev_top_correct"))),
     ]
     if args.perturb:

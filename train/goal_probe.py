@@ -12,6 +12,8 @@
 - 맞는 방향 확률: 그 목표의 거리표에서 거리가 줄어드는 이웃 방향들에 정책이 준 확률 합
 - 가장 높은 행동이 맞는 방향인가
 - 바뀜: 두 목표에서 가장 높은 행동이 다른 비율
+- **분기점 바뀜** (판정용, 10-08 외부 검토 반영): 두 목표의 "맞는 방향" 집합이 겹치지 않는 칸(= 목표에 따라 최적 행동이 반드시 달라야 하는 칸)만 셈
+  모든 칸으로 재면 두 목표가 같은 방향인 칸(예: 둘 다 위로 나가야 하는 통로)이 섞여 희석됨
 - 목표 정보가 없는 모델(LAT1 등)도 돌릴 수 있음 (그땐 관찰이 같아서 바뀜 0%가 기준선)
 
 칸: 두 구간의 경로 밖 상태(offpath.pkl)에서 두 거리표에 다 있는 칸, 경로 거리 구간별로 골고루
@@ -103,6 +105,7 @@ def main():
             argmaxes.append(top)
             out[s.name] = {"p_correct": p_good, "top": top, "top_correct": top in good, "correct": sorted(good)}
         out["flipped"] = argmaxes[0] != argmaxes[1]
+        out["branch"] = not (set(out[segs[0].name]["correct"]) & set(out[segs[1].name]["correct"]))
         rows.append(out)
     for env in envs:
         env.close()
@@ -124,8 +127,15 @@ def main():
         print(f"{band:>8}{len(rs):>5}" + "".join(f"{c[0]:>20.0%} / {c[1]:<5.0%}" for c in cols) + f"{flip:>8.0%}")
     allc = {s.name: float(np.mean([r[s.name]["top_correct"] for r in rows])) for s in segs}
     summary["all"] = {**allc, "flipped": float(np.mean([r["flipped"] for r in rows]))}
+    br = [r for r in rows if r["branch"]]
+    summary["branch"] = {"tiles": len(br), "flipped": float(np.mean([r["flipped"] for r in br])) if br else None,
+                         **{s.name: float(np.mean([r[s.name]["top_correct"] for r in br])) if br else None for s in segs}}
     print(f"{'전체':>8}{len(rows):>5}  최고 행동이 맞는 방향: " +
           ", ".join(f"{k} {v:.0%}" for k, v in allc.items()) + f", 바뀜 {summary['all']['flipped']:.0%}")
+    b = summary["branch"]
+    if b["tiles"]:
+        print(f"{'분기점':>8}{b['tiles']:>5}  (두 목표의 맞는 방향이 겹치지 않는 칸) 바뀜 {b['flipped']:.0%}, " +
+              ", ".join(f"{s.name} 맞는 방향 {b[s.name]:.0%}" for s in segs))
     out = Path("runs/diagnose")
     out.mkdir(parents=True, exist_ok=True)
     stem = f"goalprobe_{'+'.join(args.segments)}_{time.strftime('%m%d_%H%M')}_{label}"

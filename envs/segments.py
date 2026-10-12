@@ -34,6 +34,8 @@ class Segment:
     eval_states: dict = field(default_factory=dict)  # 진단용 추가 시작 상태 {이름: 경로}
     compose: list = None          # 평가용 구간: 이 구간들의 거리표를 이어 붙여서 씀 (BFS를 새로 안 돌림)
     note: str = ""                # 사람이 읽는 메모 (스토리 조건 등)
+    # 트레이너가 길을 막는 구간 (M2b부터): 탐색 중 시야에 걸려 잠기면 "막힌 칸"이 아니라 대화+전투를 A로 넘기고 지나감
+    trainers: bool = False
 
     def __post_init__(self):
         if self.start_state is None:
@@ -121,6 +123,55 @@ SEGMENTS = {
         goal_maps=[(26, 10)],
         note="30번도로 (7,53) → 포켓몬할아버지 집. 트레이너 시야, 스토리 이벤트 확인 필요",
     ),
+    # ---- 전멸 대응: 부활 위치에서 출발하는 구간 (원칙: 전멸은 지표로만, 최종 플레이는 부활 위치에서 이어감) ----
+    # 집 2층 (전멸 → 마지막 회복 장소 = 집 2층, HP 가득, 돈 절반) → 집 1층. 그 뒤는 newbark 구간
+    #   시작 상태: 29번도로 전투에서 HP를 1로 써넣고 진 상태 (데이터 생성용 비계, 10-08)
+    "house2f": Segment(
+        name="house2f",
+        allowed_maps=[(24, 7)],
+        goal_maps=[(24, 6)],
+        start_state="states/segments/respawn_home.state",
+        note="전멸 부활 위치 (24,7,3,3) → 계단 → 집 1층",
+    ),
+    # ---- 회복 (상위 계획 규칙: 새 마을 첫 도착 또는 HP 절반 미만이면 센터, 10-08 사용자 제안) ----
+    # 무궁시티 (29번도로 쪽 입구) → 포켓몬센터 안. 그 뒤 간호사 대화는 매크로 (envs/heal.py)
+    "cherrygrove_pc": Segment(
+        name="cherrygrove_pc",
+        allowed_maps=[(26, 3)],
+        goal_maps=[(26, 5)],
+        start_state="states/segments/route29/reached_goal.state",
+        note="무궁시티 도착 상태 → 포켓몬센터 문",
+    ),
+    # 포켓몬센터 안 (회복 직후 = 전멸 부활 위치이기도 함) → 무궁시티
+    "cherrygrove_pc_exit": Segment(
+        name="cherrygrove_pc_exit",
+        allowed_maps=[(26, 5)],
+        goal_maps=[(26, 3)],
+        note="센터 안 간호사 앞 → 문 → 무궁시티",
+    ),
+    # ---- M2a 돌아오는 길 (포켓몬할아버지 집 → 공박사 연구소). 스토리상 알/도감 이벤트 뒤에 지나감 ----
+    #   지금 시작 상태는 이벤트 전 상태 (이동 학습용). 이벤트 후 상태가 생기면 바꿔 끼움 (길은 같음)
+    # 할아버지 집 → 30번도로 → 무궁시티. 시작: route30 도착 상태 (집 안)
+    "route30_rev": Segment(
+        name="route30_rev",
+        allowed_maps=[(26, 10), (26, 1)],
+        goal_maps=[(26, 3)],
+        note="포켓몬할아버지 집 안 → 30번도로 남쪽 → 무궁시티. 열매집(26,9) 들어가면 실패",
+    ),
+    # 무궁시티 북쪽 입구 → 29번도로 (동쪽 출구). 시작: route30_rev 도착 상태. 돌아올 때 라이벌전이 여기서 (이벤트 뒤)
+    "cherrygrove_rev": Segment(
+        name="cherrygrove_rev",
+        allowed_maps=[(26, 3)],
+        goal_maps=[(24, 3)],
+        note="무궁시티 (30번도로 쪽) → 29번도로. 건물 들어가면 실패",
+    ),
+    # 연두마을 서쪽 입구 → 공박사 연구소. 시작: route29_rev 도착 상태
+    "newbark_lab": Segment(
+        name="newbark_lab",
+        allowed_maps=[(24, 4)],
+        goal_maps=[(24, 5)],
+        note="연두마을 (29번도로 쪽) → 공박사 연구소 문",
+    ),
     # GOAL1용: 29번도로를 반대로 (서쪽 끝 → 연두마을). 스토리상 "할아버지 집 → 공박사 연구소" 귀환 때 같은 길을 동쪽으로 감
     #   같은 화면에서 정답 방향이 route29와 반대 → 화면만 보는 정책은 둘 다 못 함 (목표 정보 시험)
     #   시작 상태: route29 시연의 마지막 칸 (0,7) 상태 (무궁시티 바로 앞, 시연과 같은 HP)
@@ -129,6 +180,52 @@ SEGMENTS = {
         allowed_maps=[(24, 3)],
         goal_maps=[(24, 4)],
         note="29번도로 서쪽 끝 (0,7) → 연두마을. 턱은 동쪽으로 못 넘는 방향이 있어 route29와 길이 다를 수 있음",
+    ),
+    # ---- M2b (10-10): 연구소 이벤트 뒤 → 31번도로 → 도라지시티 → 체육관 ----
+    # 30번도로 남쪽 입구 → 31번도로. 시작: M2a 끝(연구소 이벤트 뒤) 상태에서 run_story로 30번도로 입구까지 (무궁 센터 회복, HP 가득)
+    #   route30(할아버지 집 목표)과 같은 길을 북쪽 끝까지 더 감 → 할아버지 집 갈림길이 새 분기점
+    "route30_north": Segment(
+        name="route30_north",
+        trainers=True,
+        allowed_maps=[(26, 1)],
+        goal_maps=[(26, 2)],
+        note="30번도로 (무궁시티 쪽) → 31번도로. 할아버지 집/열매집 들어가면 실패. 트레이너 있음",
+    ),
+    # 31번도로 (30번도로 쪽) → 게이트 → 도라지시티. 어두운동굴 입구 들어가면 실패
+    "route31": Segment(
+        name="route31",
+        trainers=True,
+        allowed_maps=[(26, 2), (26, 11)],
+        goal_maps=[(10, 5)],
+        start_state="states/segments/route30_north/reached_goal.state",
+        note="31번도로 → 31번-도라지 게이트 → 도라지시티. 턱 있음",
+    ),
+    # 도라지시티 (서쪽 게이트 쪽) → 체육관 문
+    "violet_gym": Segment(
+        name="violet_gym",
+        trainers=True,
+        allowed_maps=[(10, 5)],
+        goal_maps=[(10, 7)],
+        start_state="states/segments/route31/reached_goal.state",
+        note="도라지시티 → 도라지체육관 문. 다른 건물 들어가면 실패",
+    ),
+    # 도라지시티 → 포켓몬센터 (회복 규칙: 새 마을 첫 도착)
+    "violet_pc": Segment(
+        name="violet_pc",
+        trainers=True,
+        allowed_maps=[(10, 5)],
+        goal_maps=[(10, 10)],
+        start_state="states/segments/route31/reached_goal.state",
+        note="도라지시티 → 도라지 포켓몬센터",
+    ),
+    # 센터 안 → 도라지시티
+    "violet_pc_exit": Segment(
+        name="violet_pc_exit",
+        trainers=True,
+        allowed_maps=[(10, 10)],
+        goal_maps=[(10, 5)],
+        start_state="states/segments/violet_pc/reached_goal.state",
+        note="도라지 포켓몬센터 안 → 도라지시티",
     ),
     # (진행 순서와 무관한 평가용 구간은 맨 뒤에 둠: --harvest의 '다음 구간' 자동 연결이 순서를 봄)
     # 평가용: 집 1층 → 무궁시티 한 판 (newbark + route29를 이어 붙였을 때 끝까지 가나)
