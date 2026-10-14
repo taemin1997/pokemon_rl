@@ -13,5 +13,4 @@
 - `uv sync` 후 `uv run python -m train.train_ppo ...` (명령 예시는 각 실험 기록에)
 
 ## 고지
-- 이 저장소는 **ROM과 세이브 파일을 포함하지 않음**. 실행하려면 포켓몬 금(한국어판) ROM을 직접 준비해 `roms/gold_rom.gb`에 두어야 함
-- Pokémon은 Nintendo / Creatures / GAME FREAK의 상표임. 이 프로젝트는 **비상업 연구·포트폴리오 목적**이며 위 회사들과 관계없음
+이 저장소는 ROM 및 세이브 파일을 배포하지 않습니다. 실행하려면 이용에 필요한 권한을 확보한 포켓몬 금(한국어판) ROM을 사용자가 직접 준비해 roms/gold_rom.gb에 배치해야 합니다.
