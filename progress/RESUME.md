@@ -66,3 +66,7 @@ Stop-Process -Id <번호> -Force
   - 끊겨도 계속 돌게 띄우기 (10-14): `Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','& .\scripts\e26_stage1.ps1 2>&1 | Out-File -Encoding utf8 runs\e26\stage1.log' -WindowStyle Hidden`
   - 주의: `*>` 리다이렉트는 UTF-16 로그가 됨. Windows PowerShell 5.1에선 Stop 모드 + 파이썬 stderr 경고가 스크립트를 멈춤 (스크립트 안에서 호출 구간만 Continue로 처리함)
   - 생성되는 `runs/stuck` 디버그 덤프와 캐시는 확인 후 정리
+
+## 5. 저장소 안전장치 (10-14)
+- 새로 받은 저장소에선 한 번: `uv run python scripts/check_assets.py --install` (커밋 전 저작물 검사 훅. ROM 헤더·금지 확장자·허용 안 된 이미지·2MB 넘는 파일을 막음)
+- 게임 화면 캡처는 `notes/img_local/` (무시 목록, 저장소에 안 올라감). 직접 만든 그래프만 `docs/figures/`에
