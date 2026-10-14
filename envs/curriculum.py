@@ -681,7 +681,8 @@ class MultiSegmentEnv(GoldEnv):
     - 구간을 바꿀 때 바뀌는 것: 허용 맵, 목표 맵, 관찰의 목표 칸, 거리표(진단용), 판 길이
     """
 
-    def __init__(self, segments, real_start_prob=0.1, lateral_prob=0.25, window=4, weights=None, **kwargs):
+    def __init__(self, segments, real_start_prob=0.1, lateral_prob=0.25, window=4, weights=None,
+                 extra_starts=None, extra_prob=0.0, **kwargs):
         from envs.gold_env import GOAL_GROUPS, GOAL_NUMBERS
         from envs.offpath_tiles import eval_holdout_tiles, in_holdout
         from envs.segments import SEGMENTS
@@ -690,6 +691,7 @@ class MultiSegmentEnv(GoldEnv):
         first = SEGMENTS[names[0]]
         super().__init__(**{**first.env_kwargs(), **kwargs})
         self.real_start_prob, self.lateral_prob, self.window = real_start_prob, lateral_prob, window
+        self.extra_prob = extra_prob
         self.seg_names = names
         self.weights = np.array(weights if weights else [1.0] * len(names), dtype=float)
         self.segs = {}
@@ -704,7 +706,8 @@ class MultiSegmentEnv(GoldEnv):
                 lat = [(p, t["path_dist"], t["nearest_demo"], t["state"]) for p, t in tiles.items()
                        if t["path_dist"] > 0 and p not in banned and not in_holdout(n, p)]
             import json
-            dist = {tuple(r[:4]): r[4] for r in json.loads(Path(seg.dist_path).read_text())}
+            # 거리표는 진단 지표 전용 (보상 아님). E26 자동 구간처럼 없을 수 있음 → 빈 표
+            dist = {tuple(r[:4]): r[4] for r in json.loads(Path(seg.dist_path).read_text())} if Path(seg.dist_path).exists() else {}
             g = list(seg.goal_maps)[0]
             gv = np.zeros(GOAL_GROUPS + GOAL_NUMBERS, dtype=np.float32)
             gv[g[0]] = 1.0
@@ -715,6 +718,8 @@ class MultiSegmentEnv(GoldEnv):
                 "start": Path(seg.start_state).read_bytes(),
                 "demo": [zlib.decompress(z) for z in demo["states"]], "lat": lat,
                 "ptr": len(demo["states"]) - 1, "radius": 1,
+                # E26 트랙 B (10-14): 통합 실행에서 모은 구간 전환 상태 (경계 출발점). extra_prob 확률로 이 중 하나에서 시작
+                "extra": [Path(f).read_bytes() for f in (extra_starts or {}).get(n, [])],
             }
         self.cur = names[0]
         self.kind, self.idx = None, None      # 이번 판: "real" / "demo" (시연 번호) / "lat" (path_dist)
@@ -746,6 +751,10 @@ class MultiSegmentEnv(GoldEnv):
         s = self.segs[self.cur]
         self.allowed_maps, self.goal_maps, self.dist = s["allowed"], s["goal"], s["dist"]
         self.goal_vec, self.max_steps = s["goal_vec"], s["max_steps"]
+        if s["extra"] and self.rng.random() < self.extra_prob:
+            self.kind, self.idx = "extra", int(self.rng.integers(len(s["extra"])))
+            self.pyboy.load_state(io.BytesIO(s["extra"][self.idx]))
+            return
         u = self.rng.random()
         if u < self.real_start_prob:
             self.kind, self.idx = "real", None

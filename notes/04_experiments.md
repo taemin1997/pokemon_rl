@@ -51,9 +51,9 @@
 | E19 | [LAT1_route29](experiments/E19_LAT1_route29.md) | 경로 옆 시작 + 폭 커리큘럼 | ✅ **빼둔 지역 77~84%, 시드 2개** (M1 대표) |
 | E20 | [LAT1_MEM_route29](experiments/E20_LAT1_MEM_route29.md) | LAT1 + 짧은 기억 | ✅ 혼동 통로 6/12, 벽 고집 그대로 |
 | E21 | [GOAL1_route29](experiments/E21_GOAL1.md) | 목표 정보 + 양방향 (정책 하나) | ❌ 정방향 0%, 목표 사용 출렁임 → 원인: 은닉층 없는 선형 결합 |
-| E25 | [NEWMAP](experiments/E25_NEWMAP.md) | **[A]** 새 맵(30번도로 돌아오기)을 자기 경험으로: NM0 보상만 / NM1-A 경로 발견(Go-Explore) / NM1-B 발견 경로로 커리큘럼 / NM2 방문 보상(탐색 부족일 때만) / NM3 랜덤 초기 | 🔄 NM1-A 탐색 중 |
+| E25 | [NEWMAP](experiments/E25_NEWMAP.md) | **[A]** 새 맵을 Go-Explore 경로로 학습, 사전학습/랜덤 초기 비교 | ✅ Go-Explore 8/8 경로 발견. 고정 출발 100%; 경로 밖은 랜덤 초기 쪽이 우세 |
 | E24 | [ZS30](experiments/E24_ZS30.md) | **[A]** (학습 없음) GOAL2를 처음 보는 30번도로에 | ❌ 0% (random 이하): 능력이 학습한 맵에 묶임 |
-| E23 | [M2A_multi](experiments/E23_M2A.md) | **[B]** 구간 8개 정책 하나, 판마다 구간 뽑기 | ⬜ 초안 (구현 완료) |
-| E27 | [M2B_multi](experiments/E27_M2B.md) | **[B]** M2a 11 + M2b 5구간, M2A_r30에서 이어서, auto_event | ⏳ 연쇄 2 뒤 자동 시작 |
-| E26 | [SELFREPAIR](experiments/E26_SELFREPAIR.md) | **[A]** 실패 감지 → 재탐색(Go-Explore) → 재학습 → 재도전 (감독기), 첫 무대 M2b | ⬜ 초안 |
+| E23 | [M2A_multi](experiments/E23_M2A.md) | **[B]** 여러 구간을 정책 하나로, route30 보강 | ✅ M2a 11구간 실패 ≤4% (시드 0), 시드 1은 0% |
+| E27 | [M2B_multi](experiments/E27_M2B.md) | **[B]** M2a 11 + M2b 5구간, M2A_r30에서 이어서, auto_event | ⚠️ 구간 성능·보존 통과, 통합 8/20·9/20 미달 (연구소 경계 상태/규칙 실패) |
+| E26 | [SELFREPAIR](experiments/E26_SELFREPAIR.md) | **[A]** 실패 감지 → 재탐색(Go-Explore) → 재학습 → 재도전 (감독기), 첫 무대 M2b | 🔄 설계 확정, 1단계 재현성 검증 완료. 2단계 기준선 전 |
 | E22 | [GOAL2_route29](experiments/E22_GOAL2.md) | GOAL1 + 은닉층 256-256 | ✅ **정방향 96~100%, 반대 100% (시드 2개)**, 빼둔 지역 71~100% (시드 편차 큼) |

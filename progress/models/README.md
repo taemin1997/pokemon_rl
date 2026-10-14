@@ -39,4 +39,4 @@
 | [A_NM3_route30rev_seed1](A_NM3_route30rev_seed1.md) | 10-10 | ✅ 200k | 고정 출발 100%, 경로 밖 100% |
 | [M2A_multi_seed1](M2A_multi_seed1.md) | 10-10 | ✅ 2M | M2A_r30_seed1의 재료 (완료) |
 | [M2A_r30_seed1](M2A_r30_seed1.md) | 10-10 | ✅ 300k | 11구간 길 찾기 실패 0% (실패는 전멸뿐), 통합 실행 19/20 |
-| [M2B_multi](M2B_multi.md) | 10-10 | ⏳ 1M | 학습 중 |
+| [M2B_multi](M2B_multi.md) | 10-10 | ⚠️ 1M 완료 | 구간 성능·보존 통과, 통합 8/20·9/20 미달 |

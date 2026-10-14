@@ -34,6 +34,9 @@ class Segment:
     eval_states: dict = field(default_factory=dict)  # 진단용 추가 시작 상태 {이름: 경로}
     compose: list = None          # 평가용 구간: 이 구간들의 거리표를 이어 붙여서 씀 (BFS를 새로 안 돌림)
     note: str = ""                # 사람이 읽는 메모 (스토리 조건 등)
+    eval_only: bool = False       # 평가 전용 (E26 10-14): 학습·통합 실행 구간 선택에서 뺌
+    dist_of: str = None           # 거리표를 다른 구간 것으로 (같은 목표·같은 맵. 진단 지표 전용, 보상 아님)
+    demo_file: str = None         # 시연 파일 경로 덮어쓰기 (E26: 실험별 폴더에 둔 Go-Explore 경로)
     # 트레이너가 길을 막는 구간 (M2b부터): 탐색 중 시야에 걸려 잠기면 "막힌 칸"이 아니라 대화+전투를 A로 넘기고 지나감
     trainers: bool = False
 
@@ -43,7 +46,7 @@ class Segment:
 
     @property
     def dist_path(self):
-        return str(DATA_DIR / f"{self.name}_dist.json")
+        return str(DATA_DIR / f"{self.dist_of or self.name}_dist.json")
 
     @property
     def edges_path(self):
@@ -57,7 +60,7 @@ class Segment:
     @property
     def demo_path(self):
         """시작 → 목표 경로 위의 상태들 (build_segment --demo). 역방향 시연 학습용"""
-        return str(STATE_DIR / self.name / "demo.pkl")
+        return self.demo_file or str(STATE_DIR / self.name / "demo.pkl")
 
     def ready(self):
         """학습에 필요한 파일이 다 있나"""
@@ -239,4 +242,45 @@ SEGMENTS = {
         compose=["newbark", "route29"],              # 거리표 = 두 구간 거리표 이어 붙이기 (아래 build_segment 참고)
         note="평가 전용. newbark → route29 이어 붙이기 검증",
     ),
+    # E26 평가 전용 (10-14): 구간을 이을 때 생기는 미학습 경계 출발 상태. **학습 데이터에 넣지 않음** (states/e26/eval/)
+    #   이탈(다른 맵으로 들어감) = 실패 → 규칙·매크로 없이 정책만 잼
+    "newbark_labdoor": Segment(
+        name="newbark_labdoor",
+        allowed_maps=[(24, 4)],                      # 연두마을 (연구소로 다시 들어가면 이탈 = 실패)
+        goal_maps=[(24, 3)],                         # 29번도로 (newbark 구간과 같은 목표)
+        start_state="states/e26/eval/e_lab.state",
+        dist_of="newbark",
+        eval_only=True,
+        note="E-lab: 연구소 이벤트·공박사 대화·나가는 길 이벤트 뒤 연두마을로 막 나온 상태 (10-12 판정 3 실패 지점)",
+    ),
+    "violet_pc_counter": Segment(
+        name="violet_pc_counter",
+        allowed_maps=[(10, 10)],                     # 도라지 포켓몬센터
+        goal_maps=[(10, 5)],                         # 도라지시티 (violet_pc_exit와 같은 목표)
+        start_state="states/e26/eval/e_violet.state",
+        dist_of="violet_pc_exit",
+        eval_only=True,
+        note="E-violet (전이 평가 전용, 어떤 학습에도 금지): 도라지 센터 회복 매크로 직후 간호사 앞",
+    ),
 }
+
+
+# ---------------------------------------------------------------
+# 실험 중에 자동으로 만든 구간 (E26 트랙 A, 10-14)
+#   환경변수 POKE_EXTRA_SEGMENTS = JSON 파일 경로 (구간 정의 목록). 학습 병렬 프로세스까지 같은 구간을 보게 환경변수로
+#   사람이 이 파일을 쓰지 않음: train/selfrepair.py가 실패 감지 → Go-Explore 뒤에 씀
+# ---------------------------------------------------------------
+def _load_extra_segments():
+    import json
+    import os
+    path = os.environ.get("POKE_EXTRA_SEGMENTS")
+    if not path or not Path(path).exists():
+        return
+    for d in json.loads(Path(path).read_text(encoding="utf-8")):
+        d = dict(d)
+        d["allowed_maps"] = [tuple(m) for m in d["allowed_maps"]]
+        d["goal_maps"] = [tuple(m) for m in d["goal_maps"]]
+        SEGMENTS[d["name"]] = Segment(**d)
+
+
+_load_extra_segments()

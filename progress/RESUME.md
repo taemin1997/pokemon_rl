@@ -54,9 +54,15 @@ Stop-Process -Id <번호> -Force
 
 새 대화에서 Claude에게는 "progress/README.md 보고 이어서 하자" 정도면 됨 (프로젝트 기억에도 이 폴더 구조가 저장돼 있음)
 
-## 4. M2B_multi 학습 연쇄 (10-12 09:19 재개 기준)
-- 스크립트 (세션 scratchpad, 지워지면 아래 내용으로 다시 만들기): `m2b_train5.sh` → 로그 `runs/m2b_train5.log`, `locked_eval5.sh` → `runs/m2b_locked5.log`
-  - 학습: `train_ppo --env m2b_multi --reward goal_only --move tile --goal --hidden 256,256 --fast-battle --auto-event --resume latest --total-steps 1000000 --name M2B_multi --no-live` (로그 20분 정지 → 학습/워커 프로세스 종료 후 재시작, 최대 5번)
-  - 끝나면 평가: 새 5구간(route30_north/route31 50판) / 기존 11구간 / 경로 밖 3구간 / `run_story --targets "26,10;24,5;10,7" --max-steps 6000` 20판
-  - 시계 고정 평가: 학습 로그에 "끝"이 나오면 `POKE_RTC_LOCK=1`로 새 5구간 + M2A_r30 vs M2B 11구간 + 통합 실행 두 모델 (학습 연쇄가 "중단"이면 같이 끝남)
-- 중간에 끊기면 같은 두 스크립트를 `nohup bash`로 다시 실행하면 됨 (`--resume latest`라 마지막 체크포인트부터)
+## 4. 현재 재개 지점 (10-13)
+- M2B_multi 100만 학습과 E27 평가는 끝남. **M2B를 재개 학습하지 않음**
+- E26 1단계 재현성 검증 완료: `runs/e26/stage1_report.md`
+- 다음은 E26 2단계 기준선. `notes/experiments/E26_SELFREPAIR.md`의 순서를 따름
+  1. E-lab/E-violet 평가 상태 생성·고정 및 SHA1/의미적 중복 기준 기록
+  2. 아침·낮·밤 3조건 기준선 측정
+  3. 정책 실패/규칙 개입 실패/구간 전환 오류/실험 무효 분리
+- 기준선 결과를 먼저 보고하기 전에는 E26 학습, PPO 이어 학습, 모델 변경을 시작하지 않음
+- 재현성 검증을 다시 돌릴 때만 PowerShell에서 `./scripts/e26_stage1.ps1` 사용.
+  - 끊겨도 계속 돌게 띄우기 (10-14): `Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','& .\scripts\e26_stage1.ps1 2>&1 | Out-File -Encoding utf8 runs\e26\stage1.log' -WindowStyle Hidden`
+  - 주의: `*>` 리다이렉트는 UTF-16 로그가 됨. Windows PowerShell 5.1에선 Stop 모드 + 파이썬 stderr 경고가 스크립트를 멈춤 (스크립트 안에서 호출 구간만 Continue로 처리함)
+  - 생성되는 `runs/stuck` 디버그 덤프와 캐시는 확인 후 정리

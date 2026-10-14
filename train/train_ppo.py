@@ -210,6 +210,17 @@ for _name, _seg in SEGMENTS.items():
         "_class": "demo",
     })
 
+# 실험별 학습 설정 (E26, 10-14): 환경변수 POKE_EXTRA_PRESETS = JSON 파일 {이름: 설정}. multi_seg + extra_starts 등
+#   train/selfrepair.py (트랙 A), scripts/e26_b (트랙 B)가 만들어 줌. 병렬 프로세스까지 같게 환경변수로
+def _load_extra_presets():
+    import os
+    path = os.environ.get("POKE_EXTRA_PRESETS")
+    if path and Path(path).exists():
+        CURRICULUM_PRESETS.update(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+_load_extra_presets()
+
 # info에 있으면 에피소드 끝날 때 TensorBoard에 기록할 진행 지표들
 GAME_METRICS = [
     "visited_tiles", "visited_maps", "badges",
@@ -409,6 +420,9 @@ class MultiSegCurriculumCallback(BaseCallback):
             s["hits"] += [ok for _, kind, i, ok in mine if kind == "demo" and s["ptr"] <= i <= s["ptr"] + self.window]
             s["lat_hits"] += [ok for _, kind, pd, ok in mine if kind == "lat" and pd == s["radius"]]
             real = [ok for _, kind, _, ok in mine if kind == "real"]
+            extra = [ok for _, kind, _, ok in mine if kind == "extra"]
+            if extra:
+                self.logger.record(f"game/extra_goal/{n}", sum(extra) / len(extra))   # E26 트랙 B 경계 출발 도착률
             lat = [ok for _, kind, _, ok in mine if kind == "lat"]
             rate = sum(s["hits"]) / len(s["hits"]) if s["hits"] else 0.0
             lat_rate = sum(s["lat_hits"]) / len(s["lat_hits"]) if s["lat_hits"] else 0.0
@@ -609,7 +623,9 @@ def main():
         # 판마다 구간을 뽑음: 모든 환경이 같은 설정 (구간 전부를 들고 있음)
         seg_parts = CURRICULUM_PRESETS[args.env]["parts"]
         base_env = CURRICULUM_PRESETS[args.env]["base"]
-        env_cls, env_kwargs = MultiSegmentEnv, {"segments": seg_parts, "weights": CURRICULUM_PRESETS[args.env].get("weights")}
+        env_cls, env_kwargs = MultiSegmentEnv, {"segments": seg_parts, "weights": CURRICULUM_PRESETS[args.env].get("weights"),
+                                                "extra_starts": CURRICULUM_PRESETS[args.env].get("extra_starts"),
+                                                "extra_prob": CURRICULUM_PRESETS[args.env].get("extra_prob", 0.0)}
     elif args.env in CURRICULUM_PRESETS and CURRICULUM_PRESETS[args.env].get("_class") == "multi_lat":
         # 여러 구간 섞기: 환경 i는 parts[i % 구간 수]를 맡음 (6개, 2구간이면 3개씩)
         parts = CURRICULUM_PRESETS[args.env]["parts"]

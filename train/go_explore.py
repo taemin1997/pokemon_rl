@@ -121,6 +121,7 @@ def main():
     parser.add_argument("--walk", type=int, default=20, help="한 번 고른 칸에서 무작위로 걷는 최대 걸음")
     parser.add_argument("--repeat", type=float, default=0.7, help="직전 방향을 유지할 확률")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--out", default=None, help="결과 경로 (기본: 구간 폴더의 demo_goexplore.pkl). E26: 실험별 폴더로 격리")
     args = parser.parse_args()
     seg = SEGMENTS[args.segment]
 
@@ -135,7 +136,8 @@ def main():
     dist = {}
     if Path(seg.dist_path).exists():
         dist = {tuple(r[:4]): r[4] for r in json.loads(Path(seg.dist_path).read_text())}
-    out = Path(seg.demo_path).with_name("demo_goexplore.pkl")
+    out = Path(args.out) if args.out else Path(seg.demo_path).with_name("demo_goexplore.pkl")
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(pickle.dumps({
         "segment": seg.name,
         "source": "go_explore",

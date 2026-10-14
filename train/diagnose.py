@@ -22,6 +22,7 @@
 """
 
 import argparse
+import os
 import json
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -101,6 +102,13 @@ def run_one(job):
     # 걸음 나누기 (외부 검토 10-08): 도착 걸음 = 칸 이동 + 막힘(방향키인데 제자리) + A/B 버튼
     #   전투는 auto_battle이면 한 스텝 안에서 처리되므로 걸음 수에 안 들어감
     n_move = n_blocked = n_button = 0
+    # E26 (10-14): POKE_DETECT=1이면 실패 감지기를 관찰만 (정상 구간 오탐률). 행동에는 영향 없음
+    det = None
+    if os.environ.get("POKE_DETECT") == "1":
+        from train.detector import FailureDetector
+        det = FailureDetector()
+        det.new_leg(tuple(seg.goal_maps[0]), info["position"][:2])
+        det.new_goal(tuple(seg.goal_maps[0]), info["position"][:2], info["position"], b"")
     done = False
     while not done:
         if chain:
@@ -112,8 +120,13 @@ def run_one(job):
         else:
             action, _ = model.predict(obs)
         before = info["position"]
+        b0 = info.get("battles", 0)
         obs, _, terminated, truncated, info = env.step(action)
         done = terminated or truncated
+        if det is not None:
+            det.on_map(info["position"][:2])
+            if info.get("battles", 0) == b0:
+                det.step(info["position"])
         if int(action) >= 4:
             n_button += 1
         elif info["position"] != before:
@@ -121,6 +134,9 @@ def run_one(job):
         else:
             n_blocked += 1
 
+    # 10-12: 판마다 게임 시각 기록 (재현성). 판 끝에 읽음 — 불러온 직후엔 세이브 상태의 옛 시각이 몇 프레임 남아 있음
+    from envs import clock
+    clock_at_start = clock.info(env.pyboy)
     result = {
         "policy": policy_label(policy),
         "move_mode": move_mode,
@@ -134,6 +150,9 @@ def run_one(job):
         "whiteout": info.get("whiteouts", 0) > 0,
         "n_move": n_move, "n_blocked": n_blocked, "n_button": n_button,
         "end_pos": list(info["position"]),   # 이탈했을 때 어디로 갔나 보려고
+        "seed": seed,
+        "detect": (det.report() if det.fired else None) if det is not None else "off",
+        **clock_at_start,
     }
     env.close()
     return result
@@ -212,11 +231,24 @@ def main():
     # 파일명: <구간>_<날짜시각>_<정책들>
     import time
     names = "+".join(dict.fromkeys(policy_label(p).split("@")[0] for p in args.policies))[:120]
-    stem = f"{args.segment}_{time.strftime('%m%d_%H%M')}_{names}"
+    # 분 단위 이름은 연속 검증 실행이 같은 분에 끝날 때 앞 결과를 덮어쓴다.
+    # 나노초 하위값까지 넣어 각 실행 산출물이 반드시 별도 파일이 되게 한다.
+    run_id = time.strftime("%m%d_%H%M%S") + f"_{time.time_ns() % 1_000_000_000:09d}"
+    stem = f"{args.segment}_{run_id}_{names}"
     out = Path("runs/diagnose")
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{stem}_summary.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1))
     (out / f"{stem}_raw.json").write_text(json.dumps(results, ensure_ascii=False))
+    # 10-12 실행 기록 (E26 1단계): 코드 버전, 시계 조건, 시작 상태/모델 해시, 판별 게임 시각 → <stem>_meta.json
+    from train.evalrec import sha1_file, write_meta
+    write_meta(out / stem, {
+        "kind": "diagnose", "segment": args.segment, "runs": args.runs, "workers": args.workers,
+        "clock": os.environ.get("POKE_CLOCK") or ("lock" if os.environ.get("POKE_RTC_LOCK") == "1" else "wall"),
+        "game_times": sorted({r["game_time"] for r in results}), "times_of_day": sorted({r["time_of_day"] for r in results}),
+        "starts": {name: {"path": str(path), "sha1": sha1_file(path)} for name, path in seg.all_eval_states().items()},
+        "policies": {p: (sha1_file(p) if Path(p).exists() else None) for p in args.policies if not p.startswith("chain:")},
+        "goal_maps": [list(m) for m in seg.goal_maps], "allowed_maps": [list(m) for m in seg.allowed_maps],
+    })
     print(f"\n저장: {out / f'{stem}_summary.json'}")
 
 

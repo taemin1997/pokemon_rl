@@ -156,8 +156,9 @@ class GoldEnv(gym.Env):
         #   → 야생 포켓몬/전투 수가 바뀌어 같은 시드도 재현 안 됨). 환경변수 POKE_RTC_LOCK=1이면 고정
         #   (평가 재현용. 진단/통합 실행의 병렬 프로세스까지 한 번에 적용하려고 인자 대신 환경변수)
         #   고정하면 start.state 기준 게임 시각 약 8:21 (아침)
-        if os.environ.get("POKE_RTC_LOCK") == "1":
-            self.pyboy.rtc_lock_experimental(True)
+        #   10-12: envs/clock.py로 옮김 (POKE_CLOCK=lock|morning|day|night, 옛 POKE_RTC_LOCK=1 = lock)
+        from envs import clock
+        clock.setup(self.pyboy)
         # 0 = 속도 제한 없음. 창을 띄울 땐 사람이 볼 수 있게 3배속 정도로
         self.pyboy.set_emulation_speed(3 if render_mode == "human" else 0)
 
@@ -280,6 +281,9 @@ class GoldEnv(gym.Env):
         # 세이브 스테이트로 되돌림 = CartPole에서 막대를 다시 세우는 것과 같은 역할
         # 매번 오프닝부터 하면 에피소드 대부분이 인트로 대사 넘기기가 돼버림
         self._load_start()
+        # 시간대 조건이면 게임 시작 시각(WRAM)을 덮어씀 — 세이브 상태를 불러오면 원래 값으로 돌아가서 매번 (envs/clock.py)
+        from envs import clock
+        clock.after_load(self.pyboy)
         # 세이브 상태를 불러와도 화면은 다음 프레임을 그려야 바뀜 → 1프레임 그려서 첫 관찰을 맞춤 (10-08 버그 수정)
         #   예전: 판의 첫 관찰 = 직전 판의 마지막 화면 (첫 한 걸음을 엉뚱한 화면 보고 고름)
         #   goal_probe처럼 리셋만 반복하는 진단은 모든 칸이 같은 화면으로 시험됐었음
