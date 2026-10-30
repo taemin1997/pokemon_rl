@@ -19,7 +19,7 @@
 import io
 
 from envs import memory_map as mm
-from envs.heal import _press, _snap, can_move
+from envs.heal import _press, _probe_done, _snap, can_move
 
 NAME_CURSOR_X = 0xC538
 NAME_CURSOR_Y = 0xC539
@@ -29,10 +29,12 @@ NAME_ROWS = 5            # 줄 0~4, 4 = 정정/결정
 def is_name_screen(pb):
     """아래를 한 번 눌러보고 커서 줄이 한 칸 내려가면 이름 화면 (상태는 되돌림)"""
     s = _snap(pb)
+    f0 = pb.frame_count
     y0 = mm.read_byte(pb, NAME_CURSOR_Y)
     _press(pb, "down", wait=30, render=False)
     y1 = mm.read_byte(pb, NAME_CURSOR_Y)
     pb.load_state(io.BytesIO(s))
+    _probe_done(pb, f0)   # 시험 프레임은 진행으로 안 셈 (heal.real_frames, 10-23 C1)
     return y0 < NAME_ROWS and y1 == (y0 + 1) % NAME_ROWS
 
 

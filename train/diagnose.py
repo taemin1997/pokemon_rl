@@ -22,8 +22,10 @@
 """
 
 import argparse
+import hashlib
 import os
 import json
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -94,10 +96,29 @@ def run_one(job):
         model = _load(policy)
         # PPO.load가 저장된 시드로 난수를 되돌리기 때문에 반드시 load 뒤에 시드 설정
         torch.manual_seed(seed)
+    # E29 (10-21, 반사실 실험): POKE_REF_POLICY = 옛 정책. 걸음마다 KL(옛 ‖ 지금)을 기록 (행동엔 영향 없음)
+    #   POKE_OVERRIDE_TILES = "<json 파일>:<키>" → 그 칸 (맵 그룹, 번호, x, y)에 있을 때만 옛 정책이 행동을 고름
+    #   POKE_OVERRIDE_DRY=1 → 칸 도달만 기록하고 덮어쓰지 않음. 둘 다 없으면 예전과 같음. 옛 정책도 load 뒤에 시드를 다시 맞춰서 덮어쓰기 전까지는 난수 흐름이 같음
+    ref = None
+    over = set()
+    if os.environ.get("POKE_REF_POLICY") and model is not None:
+        ref = _load(os.environ["POKE_REF_POLICY"])
+        torch.manual_seed(seed)
+        if os.environ.get("POKE_OVERRIDE_TILES"):
+            f, key = os.environ["POKE_OVERRIDE_TILES"].rsplit(":", 1)
+            over = {tuple(t) for t in json.loads(Path(f).read_text(encoding="utf-8"))[key]}
+    kls, kls_over, n_over, visited_over = [], [], 0, False
 
     obs, info = env.reset()
     # 같은 시작 상태라도 프레임을 조금 흘려서 인카운터 타이밍이 판마다 달라지게 함
     env.pyboy.tick(int(rng.integers(0, 30)), False)
+    # 10-21 (설계 밖 추가 측정): POKE_FRESH_FIRST=1이면 첫 예측 전 1프레임 그려서 관찰을 다시 만듦
+    #   reset 직후 화면은 세이브 상태의 팔레트 그대로라 E-lab(아침에 저장)은 낮·밤 조건에서도 첫 화면이 아침 팔레트였음
+    #   기본 꺼짐 = 예전 결과와 같음
+    fresh_first = os.environ.get("POKE_FRESH_FIRST") == "1"
+    if fresh_first:
+        env.pyboy.tick(1, True)
+        obs = env._get_obs()
 
     # 걸음 나누기 (외부 검토 10-08): 도착 걸음 = 칸 이동 + 막힘(방향키인데 제자리) + A/B 버튼
     #   전투는 auto_battle이면 한 스텝 안에서 처리되므로 걸음 수에 안 들어감
@@ -109,16 +130,56 @@ def run_one(job):
         det = FailureDetector()
         det.new_leg(tuple(seg.goal_maps[0]), info["position"][:2])
         det.new_goal(tuple(seg.goal_maps[0]), info["position"][:2], info["position"], b"")
+    # 10-15: 판당 실제 시간 상한. 막힌 걸음마다 대화 매크로(최대 300번 누름)가 도는 판은 512걸음에 3시간 가까이 걸려
+    #   평가 전체가 멈춘 것처럼 됨 (E26 violet, A_s1 시드 30) → 상한을 넘으면 '멈춤 실패'로 기록하고 끝냄 (도착 아님)
+    ep_timeout = float(os.environ.get("POKE_EP_TIMEOUT", "300"))
+    # E32 (10-23, 밤 진단): POKE_OBS_CLOCK=morning|day|night → 게임은 그대로 두고 정책이 보는 화면만 그 시간대 색으로 다시 그림
+    #   (envs/clock.render_as: 상태 저장 → 시작 시각만 바꿔 4프레임 → 되돌림). 게임 시간 × 보는 색 2×2 분해용
+    #   POKE_TRACE=1 → 걸음마다 위치·행동·정책 행동 확률·전투·잠김·시간대 기록 (처음 갈라지는 걸음 찾기). 둘 다 기본 꺼짐 = 예전과 같음
+    obs_clock = os.environ.get("POKE_OBS_CLOCK") or None
+    trace = [] if os.environ.get("POKE_TRACE") == "1" else None
+    if obs_clock:
+        from envs import clock as _clock
+        from envs.gold_env import screen_obs
+    t_start = time.monotonic()
+    timed_out = False
     done = False
     while not done:
+        if ep_timeout > 0 and time.monotonic() - t_start > ep_timeout:
+            timed_out = True
+            break
         if chain:
             # 지금 맵이 속한 구간의 모델로 (어느 구간에도 없으면 직전 모델 유지)
             here = info["position"][:2]
             model = next((m for maps, m in chain_models if here in maps), model)
+        if obs_clock:
+            s = screen_obs(_clock.render_as(env.pyboy, obs_clock))
+            obs = {**obs, "screen": s} if isinstance(obs, dict) else s
         if model is None:
             action = int(rng.integers(0, env.action_space.n))
         else:
             action, _ = model.predict(obs)
+        if trace is not None and model is not None:
+            t, _ = model.policy.obs_to_tensor(obs)
+            with torch.no_grad():   # 확률만 계산 (표본 안 뽑음 → 행동 난수 흐름 그대로)
+                probs = model.policy.get_distribution(t).distribution.probs[0].tolist()
+            scr = obs["screen"] if isinstance(obs, dict) else obs
+            trace.append({"pos": list(info["position"]), "a": int(action), "p": [round(x, 4) for x in probs],
+                          "b": info.get("battles", 0), "ev": info.get("events", 0), "tod": int(env.pyboy.memory[1, 0xD214]),
+                          "obs": hashlib.sha1(np.ascontiguousarray(scr).tobytes()).hexdigest()[:10]})
+        if ref is not None:
+            t, _ = model.policy.obs_to_tensor(obs)
+            with torch.no_grad():
+                pn = model.policy.get_distribution(t).distribution.probs[0]
+                po = ref.policy.get_distribution(t).distribution.probs[0]
+            kl = float((po * (torch.log(po + 1e-8) - torch.log(pn + 1e-8))).sum())
+            kls.append(kl)
+            if tuple(info["position"][:4]) in over:
+                visited_over = True
+                kls_over.append(kl)
+                if os.environ.get("POKE_OVERRIDE_DRY") != "1":   # DRY = 칸 도달만 기록, 덮어쓰지 않음 (조건 B)
+                    action, _ = ref.predict(obs)
+                    n_over += 1
         before = info["position"]
         b0 = info.get("battles", 0)
         obs, _, terminated, truncated, info = env.step(action)
@@ -141,7 +202,9 @@ def run_one(job):
         "policy": policy_label(policy),
         "move_mode": move_mode,
         "start": start_name,
-        "goal": bool(info["reached_goal"]),
+        "goal": bool(info["reached_goal"]) and not timed_out,
+        "timeout": timed_out,
+        "steps": n_move + n_blocked + n_button,
         "goal_step": info.get("goal_step"),
         "left": bool(info["left_area"]),
         "progress": info.get("progress", 0),
@@ -152,6 +215,12 @@ def run_one(job):
         "end_pos": list(info["position"]),   # 이탈했을 때 어디로 갔나 보려고
         "seed": seed,
         "detect": (det.report() if det.fired else None) if det is not None else "off",
+        "fresh_first": fresh_first,
+        **({"obs_clock": obs_clock} if obs_clock else {}),
+        **({"trace": trace, "end_battles": info.get("battles", 0), "end_events": info.get("events", 0)} if trace is not None else {}),
+        **({"ref": {"policy": os.environ["POKE_REF_POLICY"], "override": os.environ.get("POKE_OVERRIDE_TILES"),
+                    "kl_mean": float(np.mean(kls)) if kls else None, "kl_over_mean": float(np.mean(kls_over)) if kls_over else None,
+                    "n_override": n_over, "visited_over": visited_over, "dry": os.environ.get("POKE_OVERRIDE_DRY") == "1"}} if ref is not None else {}),
         **clock_at_start,
     }
     env.close()
@@ -181,6 +250,7 @@ def summarize(results, shortest):
                 "whiteout_rate": float(np.mean([r["whiteout"] for r in rs])),
                 "battles": float(np.mean([r["battles"] for r in rs])),
                 "exp": float(np.mean([r["exp"] for r in rs])),
+                "timeout_rate": float(np.mean([r.get("timeout", False) for r in rs])),   # 멈춤 실패 (판당 시간 상한 초과)
             }
             # 도착한 판만: 걸음 나누기 평균 (이동 / 막힘 / 버튼)
             ok = [r for r in rs if r["goal"] and "n_move" in r]
@@ -192,6 +262,8 @@ def summarize(results, shortest):
             print(f"{policy:<30}{start:<12}{row['goal_rate']:>7.0%}{gs:>10}"
                   f"{row['progress_p50']:>8.0f} / {row['progress_p90']:<3.0f}/ {row['progress_max']:<4}{row['left_rate']:>6.0%}{row['whiteout_rate']:>6.0%}"
                   f"{row['battles']:>6.1f}{row['exp']:>7.0f}")
+            if row["timeout_rate"]:
+                print(f"{'':<42}멈춤 실패 (판당 시간 상한 초과): {row['timeout_rate']:.0%}")
             if "n_move_mean" in row:
                 print(f"{'':<42}도착 판 걸음 나누기: 이동 {row['n_move_mean']:.1f} / 막힘 {row['n_blocked_mean']:.1f} / A·B {row['n_button_mean']:.1f}")
     return rows
@@ -203,7 +275,11 @@ def main():
     parser.add_argument("policies", nargs="+", help="모델 .zip 경로들, 또는 random")
     parser.add_argument("--runs", type=int, default=25)
     parser.add_argument("--workers", type=int, default=4, help="병렬 프로세스 수 (학습 중이면 2)")
+    parser.add_argument("--episode-timeout", type=float, default=300,
+                        help="판당 실제 시간 상한(초). 넘으면 멈춤 실패로 기록. 0이면 상한 없음")
     args = parser.parse_args()
+    # 병렬 워커는 spawn으로 뜨므로 환경변수로 넘김
+    os.environ["POKE_EP_TIMEOUT"] = str(args.episode_timeout)
 
     seg = SEGMENTS[args.segment]
     if not seg.ready():
@@ -243,6 +319,8 @@ def main():
     from train.evalrec import sha1_file, write_meta
     write_meta(out / stem, {
         "kind": "diagnose", "segment": args.segment, "runs": args.runs, "workers": args.workers,
+        "episode_timeout": args.episode_timeout, "fresh_first": os.environ.get("POKE_FRESH_FIRST") == "1", "timeouts": sum(r.get("timeout", False) for r in results),
+        "obs_clock": os.environ.get("POKE_OBS_CLOCK") or None, "trace": os.environ.get("POKE_TRACE") == "1",
         "clock": os.environ.get("POKE_CLOCK") or ("lock" if os.environ.get("POKE_RTC_LOCK") == "1" else "wall"),
         "game_times": sorted({r["game_time"] for r in results}), "times_of_day": sorted({r["time_of_day"] for r in results}),
         "starts": {name: {"path": str(path), "sha1": sha1_file(path)} for name, path in seg.all_eval_states().items()},

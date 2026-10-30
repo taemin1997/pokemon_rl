@@ -67,6 +67,17 @@ Stop-Process -Id <번호> -Force
   - 주의: `*>` 리다이렉트는 UTF-16 로그가 됨. Windows PowerShell 5.1에선 Stop 모드 + 파이썬 stderr 경고가 스크립트를 멈춤 (스크립트 안에서 호출 구간만 Continue로 처리함)
   - 생성되는 `runs/stuck` 디버그 덤프와 캐시는 확인 후 정리
 
+## 4-1. E26 최종 평가 재개 지점 (10-15 17:47 중단)
+- 끝남: E-lab·E-violet × 3시간대, 16구간 × 3시간대 (54항목, `runs/e26/final_runs.json`)
+- 남음: 통합 실행 모델 5개 × 3시간대 (20판씩, 약 1시간 반+) → 보고서
+- 이어서 (끝난 항목은 자동으로 건너뜀, PowerShell):
+  `Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','uv run python -m train.e26_final eval; uv run python -m train.e26_final report' -WindowStyle Hidden -RedirectStandardOutput runs\e26\final_resume.log`
+- 10-15 변경: diagnose 판당 5분 상한(멈춤 실패), e26_final에 diagnose 40분·통합 실행 3시간 상한 + 재시도. 밤새 돌릴 땐 Windows 업데이트 재시작 미뤄둘 것 (10-15 03:42 재부팅으로 중단됨)
+
 ## 5. 저장소 안전장치 (10-14)
 - 새로 받은 저장소에선 한 번: `uv run python scripts/check_assets.py --install` (커밋 전 저작물 검사 훅. ROM 헤더·금지 확장자·허용 안 된 이미지·2MB 넘는 파일을 막음)
 - 게임 화면 캡처는 `notes/img_local/` (무시 목록, 저장소에 안 올라감). 직접 만든 그래프만 `docs/figures/`에
+
+## 10-21 E30 재개
+- 상태 확인: `tail runs/e30/run.log` ('전체 종료' 있으면 끝)
+- 재개: `nohup bash scripts/e30_run.sh >> runs/e30/run.log 2>&1 &` — 끝난 학습은 건너뛰고, 학습 8개가 다 있으면 바로 평가

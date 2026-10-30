@@ -49,6 +49,22 @@ def after_load(pb):
         pb.memory[1, START_HOUR] = PRESETS[m]
 
 
+def render_as(pb, preset, frames=4):
+    """E32 (10-23): 지금 게임 상태를 다른 시간대 색으로 그린 화면 (상태는 되돌림 → 게임 진행엔 영향 없음)
+    시작 시각만 바꾸고 frames 진행 (마지막 1프레임 그림) — 시간대 팔레트가 1~3프레임 뒤 반영 (GoldEnv.RESET_FRAMES와 같은 근거)
+    확인: 밤 게임을 아침으로 그린 화면 = 같은 칸 아침 게임 화면 (route29·route31 100% 같음, 연구소 문 앞 애니메이션 차 0.3)
+    반환 후 PyBoy 화면 버퍼는 다시 그린 화면 → 호출한 쪽은 다음 걸음이 새로 그릴 때까지 화면 버퍼를 관찰로 쓰면 안 됨"""
+    import io
+    buf = io.BytesIO()
+    pb.save_state(buf)
+    pb.memory[1, START_HOUR] = PRESETS[preset]
+    pb.tick(frames - 1, False)
+    pb.tick(1, True)
+    screen = pb.screen.ndarray[:, :, :3].copy()
+    pb.load_state(io.BytesIO(buf.getvalue()))
+    return screen
+
+
 def info(pb):
     """지금 게임 시각과 시간대 (기록용). 시간대 값은 게임이 필드 루프에서 갱신하므로 불러온 직후엔 이전 값일 수 있음"""
     tod = pb.memory[1, TIME_OF_DAY]

@@ -16,11 +16,11 @@
 | 끊겼을 때 다시 시작 | [RESUME.md](RESUME.md) | 학습/세션 재개 절차와 현재 E26 재개 지점 |
 | notes 전체 목록 | [notes/README.md](../notes/README.md), M2a 스토리 경로·이벤트 [notes/07_m2a_story.md](../notes/07_m2a_story.md) | 새 notes 파일이 생길 때 |
 
-## 지금 있는 파일 (10-14 기준)
+## 지금 있는 파일 (10-21 기준)
 - 최신 요약: [summary/latest.md](summary/latest.md) (기준일 2026-10-14)
-- 일별: [10-02](summary/daily/2026-10-02.md), [10-05](summary/daily/2026-10-05.md), [10-06](summary/daily/2026-10-06.md), [10-07](summary/daily/2026-10-07.md), [10-08](summary/daily/2026-10-08.md), [10-09](summary/daily/2026-10-09.md), [10-10](summary/daily/2026-10-10.md), [10-11](summary/daily/2026-10-11.md), [10-13](summary/daily/2026-10-13.md), [10-14](summary/daily/2026-10-14.md)
-- 주별: [2026-W40](summary/weekly/2026-W40.md) (09-28 ~ 10-04), [2026-W41](summary/weekly/2026-W41.md) (10-05 ~ 10-11, 내용은 10-08까지만 — 아직 안 고침)
-- 월별: [2026-10](summary/monthly/2026-10.md) (진행 중, 내용은 10-08까지만 — 아직 안 고침)
-- 일지: [10-07](log/2026-10-07.md), [10-08](log/2026-10-08.md), [10-09](log/2026-10-09.md), [10-10](log/2026-10-10.md), [10-11](log/2026-10-11.md), [10-12](log/2026-10-12.md), [10-13](log/2026-10-13.md), [10-14](log/2026-10-14.md) (그 전은 `README.md` 갱신 기록)
+- 일별: [10-02](summary/daily/2026-10-02.md), [10-05](summary/daily/2026-10-05.md), [10-06](summary/daily/2026-10-06.md), [10-07](summary/daily/2026-10-07.md), [10-08](summary/daily/2026-10-08.md), [10-09](summary/daily/2026-10-09.md), [10-10](summary/daily/2026-10-10.md), [10-11](summary/daily/2026-10-11.md), [10-12](summary/daily/2026-10-12.md), [10-13](summary/daily/2026-10-13.md), [10-14](summary/daily/2026-10-14.md), [10-15](summary/daily/2026-10-15.md), [10-19](summary/daily/2026-10-19.md), [10-20](summary/daily/2026-10-20.md)
+- 주별: [2026-W40](summary/weekly/2026-W40.md) (09-28 ~ 10-04), [2026-W41](summary/weekly/2026-W41.md) (10-05 ~ 10-11, 10-09~11은 10-21에 덧붙임), [2026-W42](summary/weekly/2026-W42.md) (10-12 ~ 10-18), [2026-W43](summary/weekly/2026-W43.md) (10-19 ~ 10-25, 진행 중)
+- 월별: [2026-10](summary/monthly/2026-10.md) (진행 중, 10-09~10-21은 10-21에 덧붙임)
+- 일지: [10-07](log/2026-10-07.md), [10-08](log/2026-10-08.md), [10-09](log/2026-10-09.md), [10-10](log/2026-10-10.md), [10-11](log/2026-10-11.md), [10-12](log/2026-10-12.md), [10-13](log/2026-10-13.md), [10-14](log/2026-10-14.md), [10-15](log/2026-10-15.md), [10-19](log/2026-10-19.md), [10-20](log/2026-10-20.md), [10-21](log/2026-10-21.md) (그 전은 `README.md` 갱신 기록)
 - 실험 기록: E01 ~ E27 ([notes/04_experiments.md](../notes/04_experiments.md)). 최근: [E23 M2A](../notes/experiments/E23_M2A.md), [E24 ZS30](../notes/experiments/E24_ZS30.md), [E25 NEWMAP](../notes/experiments/E25_NEWMAP.md), [E26 SELFREPAIR (1단계 완료)](../notes/experiments/E26_SELFREPAIR.md), [E27 M2B (구간 통과·통합 미달)](../notes/experiments/E27_M2B.md)
 - 모델 카드 36개 ([models/README.md](models/README.md)), 특이사항 16개 ([events/README.md](events/README.md)) — `progress/make_docs.py`로 색인 다시 만듦

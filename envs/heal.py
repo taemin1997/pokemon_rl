@@ -22,6 +22,19 @@ from envs import memory_map as mm
 # 창으로 볼 때(라이브)는 매크로 입력도 화면에 그림. 기본은 안 그림 (학습/평가 속도)
 #   "눌러보고 되돌리기" 확인(can_move, is_name_screen)은 항상 안 그림 → 그려도 되돌아가서 화면이 튀기만 함
 RENDER = False
+# 10-23 (일관성 시험 C1): 눌러보고 되돌리는 시험(can_move, is_name_screen)이 쓴 프레임 합
+#   PyBoy frame_count는 load_state로 되돌려도 안 줄어듦 → frame_count만 보면 시험만 한 걸음도 '게임이 진행됨'으로 보임
+#   real_frames(pb) = frame_count − 이 값 = 실제로 게임이 진행된 프레임 (run_story 지난 화면 판별용)
+PROBE_FRAMES = 0
+
+
+def real_frames(pb):
+    return pb.frame_count - PROBE_FRAMES
+
+
+def _probe_done(pb, f0):
+    global PROBE_FRAMES
+    PROBE_FRAMES += pb.frame_count - f0
 
 
 def _press(pb, b, wait=40, render=None):
@@ -41,6 +54,7 @@ def _snap(pb):
 def can_move(pb):
     """세이브 상태로 네 방향을 시험해서 움직여지는 방향이 있으면 True (상태는 되돌림)"""
     s = _snap(pb)
+    f0 = pb.frame_count
     p0 = mm.read_position(pb)
     ok = False
     for d in ("down", "left", "right", "up"):
@@ -50,6 +64,7 @@ def can_move(pb):
             ok = True
             break
     pb.load_state(io.BytesIO(s))
+    _probe_done(pb, f0)
     return ok
 
 

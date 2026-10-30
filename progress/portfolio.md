@@ -105,6 +105,13 @@
 - [ ] 늦게 시작되는 인카운터: 증상(탐색 18칸에서 멈춤) → 원인 → 수정 → 기존 데이터 영향 판단 (`progress/events/2026-10-07_late-encounter.md`)
 - [ ] 전투 매크로에서 기술 1만 써도 승리 0%가 나온 버그 (`events/2026-10-07_menu-residual.md`)
 - [ ] 진단이 몇 시간 멈췄을 때 원인을 어떻게 찾았나 (CPU 누적 시간 → 절전)
+- [ ] 통합 실행기가 매크로 뒤 지난 화면으로 예측하던 버그를 어떻게 찾았고, 왜 옛 판정 숫자를 무효로 했나 (`events/2026-10-20_story_stale_obs.md`)
+- [ ] E-lab 평가가 시간대를 못 쟀던 이유: 같은 시드 판이 세 시간대에서 같음 → 첫 화면 팔레트 (`events/2026-10-21_elab_first_frame.md`)
+
+**망각 (10-21, E28·E29)**
+- [ ] 기존 구간을 섞어 학습했는데도 왜 잊어버렸나, 학습 중 어떤 신호에 이미 보였나 (`real_goal`, E28 F1)
+- [ ] '목표 무시'·'경계 간섭' 가설을 어떤 측정으로 기각했나 (목표 바꿔 넣기 TV, 입구 5칸 비율)
+- [ ] 상관(행동이 바뀜)과 인과(그 행동이 실패를 만듦)를 어떻게 구별했나: 길목 칸만 옛 정책 행동으로 바꾸는 반사실 + 같은 수 대조 칸 (E29: 4 → 42/50, 대조 5/50)
 
 ## 코드 읽기 순서 (10-08)
 1. `envs/memory_map.py` (게임 주소) → 2. **`envs/gold_env.py` `step()`** (가장 중요) → 3. `train/train_ppo.py` `main()` → 4. `envs/curriculum.py` DemoReverseEnv, LateralDemoEnv → 5. `train/build_segment.py` → 6. `train/diagnose.py`, `offpath.py`, `report.py` → 7. `envs/battle.py`, `rom_data.py`

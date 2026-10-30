@@ -55,5 +55,7 @@
 | E24 | [ZS30](experiments/E24_ZS30.md) | **[A]** (학습 없음) GOAL2를 처음 보는 30번도로에 | ❌ 0% (random 이하): 능력이 학습한 맵에 묶임 |
 | E23 | [M2A_multi](experiments/E23_M2A.md) | **[B]** 여러 구간을 정책 하나로, route30 보강 | ✅ M2a 11구간 실패 ≤4% (시드 0), 시드 1은 0% |
 | E27 | [M2B_multi](experiments/E27_M2B.md) | **[B]** M2a 11 + M2b 5구간, M2A_r30에서 이어서, auto_event | ⚠️ 구간 성능·보존 통과, 통합 8/20·9/20 미달 (연구소 경계 상태/규칙 실패) |
-| E26 | [SELFREPAIR](experiments/E26_SELFREPAIR.md) | **[A]** 실패 감지 → 재탐색(Go-Explore) → 재학습 → 재도전 (감독기), 첫 무대 M2b | 🔄 설계 확정, 1단계 재현성 검증 완료. 2단계 기준선 전 |
+| E26 | [SELFREPAIR](experiments/E26_SELFREPAIR.md) | **[A]** 실패 감지 → 재탐색(Go-Explore) → 재학습 → 재도전 (감독기), 첫 무대 M2b | ⚠️ 10-21 끝: A 두 시드 연구소 복구 ✅, 보존·통합 ❌ (잊어버림, 밤). A 둘·B_s1 부분 지지, B_s0 기각 |
 | E22 | [GOAL2_route29](experiments/E22_GOAL2.md) | GOAL1 + 은닉층 256-256 | ✅ **정방향 96~100%, 반대 100% (시드 2개)**, 빼둔 지역 71~100% (시드 편차 큼) |
+| E28 | [FORGET](experiments/E28_FORGET.md) | **[A]** (학습 없음) 자동 복구 뒤 잊어버림 원인 분석 | ✅ 학습 중 real_goal에 이미 보임. 목표 무시·경계 간섭 기각, 길목 행동 뒤집힘 |
+| E29 | [CRITICAL](experiments/E29_CRITICAL.md) | **[A]** (학습 없음) 반사실: 뒤집힌 길목 칸만 옛 정책 행동으로 | ✅ **인과 지지 3/3** (예: 4 → 42/50, 대조 5/50), 판당 덮어쓰기 4.5~10.7걸음 |

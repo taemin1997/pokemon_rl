@@ -45,6 +45,8 @@ STEP_FRAMES = 24
 TILE_PRESS_FRAMES = 16
 TILE_STEP_FRAMES = 40
 MOVE_BUTTONS = ("up", "down", "left", "right")
+# reset 뒤 첫 관찰까지 진행할 프레임 (10-23, 시간대 팔레트가 반영될 때까지. reset 주석 참고)
+RESET_FRAMES = 4
 # 목표 관찰 크기 (obs_goal): 맵 그룹/번호 원핫. 금 버전 맵 그룹은 26개, 그룹 안 번호는 수십 개라 넉넉히 고정
 GOAL_GROUPS = 32
 GOAL_NUMBERS = 64
@@ -71,6 +73,13 @@ DEFAULT_REWARD = {
     #   B에서 목표 앞에서 뜸을 들인 이유: 도착 = 종료인데 도착 자체를 칭찬하는 항목이 없었음
     "goal": 0.0,
 }
+
+
+def screen_obs(rgb):
+    """게임 화면 RGB (144, 160, 3) → 관찰 (72, 80, 1). GoldEnv._screen과 E32 다시 그리기(envs/clock.render_as)가 같이 씀"""
+    gray = rgb.astype(np.float32).mean(axis=2)   # 3채널 평균 → 흑백
+    small = gray[::2, ::2]                        # 2칸마다 1칸 → 72x80
+    return small.astype(np.uint8)[:, :, None]     # 채널 축 추가 → (72, 80, 1)
 
 
 class GoldEnv(gym.Env):
@@ -202,10 +211,7 @@ class GoldEnv(gym.Env):
 
     def _screen(self):
         # screen.ndarray: (144, 160, 4) RGBA
-        rgb = self.pyboy.screen.ndarray[:, :, :3].astype(np.float32)
-        gray = rgb.mean(axis=2)          # 3채널 평균 → 흑백
-        small = gray[::2, ::2]           # 2칸마다 1칸 → 72x80
-        return small.astype(np.uint8)[:, :, None]  # 채널 축 추가 → (72, 80, 1)
+        return screen_obs(self.pyboy.screen.ndarray[:, :, :3])
 
     def _get_info(self):
         # info는 학습에 안 쓰이고 사람이 보는 용도 (로그, 디버깅)
@@ -284,9 +290,13 @@ class GoldEnv(gym.Env):
         # 시간대 조건이면 게임 시작 시각(WRAM)을 덮어씀 — 세이브 상태를 불러오면 원래 값으로 돌아가서 매번 (envs/clock.py)
         from envs import clock
         clock.after_load(self.pyboy)
-        # 세이브 상태를 불러와도 화면은 다음 프레임을 그려야 바뀜 → 1프레임 그려서 첫 관찰을 맞춤 (10-08 버그 수정)
+        # 세이브 상태를 불러와도 화면은 다음 프레임을 그려야 바뀜 → 그려서 첫 관찰을 맞춤 (10-08 버그 수정)
         #   예전: 판의 첫 관찰 = 직전 판의 마지막 화면 (첫 한 걸음을 엉뚱한 화면 보고 고름)
         #   goal_probe처럼 리셋만 반복하는 진단은 모든 칸이 같은 화면으로 시험됐었음
+        # 10-23 (일관성 시험 C4, 사용자 결정): 1프레임만 그리면 첫 관찰이 세이브 상태의 시간대 색 그대로
+        #   (게임이 시간대·팔레트를 1~3프레임 뒤에 바꿈. 구간 상태 19개 × 시계 4조건 측정 최대 3) → 4프레임째를 첫 관찰로
+        #   이 변경 전 학습·평가와는 판 시작 게임 시간이 3프레임 다름 (조우 타이밍이 달라짐 → 판 단위 재현 비교 불가)
+        self.pyboy.tick(RESET_FRAMES - 1, False)
         self.pyboy.tick(1, True)
         if self.fast_battle:
             opt = mm.read_byte(self.pyboy, mm.OPTIONS)

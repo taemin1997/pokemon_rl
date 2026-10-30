@@ -563,7 +563,15 @@ def main():
     #   --resume과 다른 점: resume은 같은 실험을 이어감, init은 다른 구간 실험의 실력을 출발점으로 빌려옴
     #   신경망 모양이 같아야 함 (조작 방식, 기억 설정을 원래 모델과 맞춤)
     parser.add_argument("--init", default=None, help="이 모델의 가중치로 시작 (예: models/DEMO_TILE_route29/final.zip)")
+    # E30 (10-21): 옛 정책 붙잡기. 손실에 β·KL(옛 ‖ 지금)을 더함 (train/anchor.py). 안 주면 예전과 같은 PPO
+    parser.add_argument("--anchor-model", default=None, help="붙잡을 옛 정책 (예: models/M2B_multi/final.zip)")
+    parser.add_argument("--anchor-coef", type=float, default=0.0, help="β (0이면 KL은 기록만)")
+    parser.add_argument("--anchor-mode", default="rollout", choices=["rollout", "states"],
+                        help="rollout = 미니배치 상태 전부 (E30 C) / states = 고정 상태 묶음 (E30 D)")
+    parser.add_argument("--anchor-states", default=None, help="mode=states일 때 상태 묶음 npz (train/e30_anchor_states.py)")
     args = parser.parse_args()
+    assert not (args.anchor_model and args.resume), "앵커는 새 학습(--init)에서만"
+    assert args.anchor_mode != "states" or args.anchor_states, "--anchor-mode states에는 --anchor-states 필요"
 
     name = args.name or args.reward
     save_dir = Path("models") / name
@@ -608,7 +616,9 @@ def main():
     # 기록용: 시드까지 같이 적어둠 (환경 설정은 env_config만 환경에 넘김)
     (save_dir / "env_config.json").write_text(json.dumps({**env_config, "seed": saved.get("seed", args.seed),
                                                          "init": saved.get("init", args.init),
-                                                         "hidden": saved.get("hidden", hidden)}))
+                                                         "hidden": saved.get("hidden", hidden),
+                                                         **({"anchor": {"model": args.anchor_model, "coef": args.anchor_coef, "mode": args.anchor_mode,
+                                                                        "states": args.anchor_states}} if args.anchor_model else {})}))
 
     # -----------------------------------------------------------
     # 1) 환경 여러 개
@@ -680,7 +690,11 @@ def main():
         model = PPO.load(args.resume, env=env, tensorboard_log="runs")
         print(f"이어서 학습: {args.resume} (지금까지 {model.num_timesteps:,}스텝)")
     else:
-        model = PPO(
+        algo = PPO
+        if args.anchor_model:
+            from train.anchor import AnchorPPO
+            algo = AnchorPPO
+        model = algo(
             # 관찰이 이미지라서 CNN. 화면에서 벽/길/NPC 같은 모양을 뽑아낸 뒤 행동 확률을 냄
             # 짧은 기억을 쓰면 관찰이 Dict(화면 + 숫자)라 MultiInputPolicy (화면은 같은 CNN, 숫자는 그대로 이어 붙임)
             "MultiInputPolicy" if (args.memory or args.goal) else "CnnPolicy",
@@ -720,6 +734,15 @@ def main():
             # 정책/가치 신경망 가중치만 복사 (옵티마이저 상태, 스텝 수는 새로)
             model.policy.load_state_dict(PPO.load(args.init, device="cpu").policy.state_dict())
             print(f"가중치 시작점: {args.init}")
+        if args.anchor_model:
+            # PPO.load가 난수 상태를 바꿀 수 있어서 앵커를 불러오기 전후로 난수 상태를 되돌림 (β=0이면 앵커 없는 학습과 같아야 함)
+            import random
+            import numpy as np
+            import torch
+            rng = (random.getstate(), np.random.get_state(), torch.get_rng_state())
+            model.setup_anchor(args.anchor_model, args.anchor_coef, args.anchor_mode, args.anchor_states, seed=args.seed)
+            random.setstate(rng[0]); np.random.set_state(rng[1]); torch.set_rng_state(rng[2])
+            print(f"앵커: {args.anchor_model} β={args.anchor_coef} ({args.anchor_mode})")
 
     # -----------------------------------------------------------
     # 3) 학습

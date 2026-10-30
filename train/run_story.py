@@ -134,6 +134,11 @@ def run_episode(env, model, parts, args, ep, log):
     from envs import clock
     REC.clear()
     REC.update({"segments": [], "targets_reached": [], "stop_reason": None, "detections": [], **clock.info(env.pyboy)})
+    # 10-20 화면 버그 확인: headless에선 규칙·매크로가 화면을 안 그리고 진행 → 그 직후 예측이 매크로 전 화면을 봄
+    #   마지막으로 그린 프레임 번호를 기억해 두고, 예측 때 다르면 '지난 화면' 1번으로 셈 (--fresh-obs면 1프레임 그려서 고침)
+    REC["stale_obs"], REC["stale_at"] = 0, []
+    # 10-23 (C1): frame_count 대신 실제 진행 프레임 (눌러보고 되돌리는 시험 프레임 뺌) — 시험만 한 걸음을 지난 화면으로 오판했음
+    env._rendered_at = envs_heal.real_frames(env.pyboy)
     from train.detector import FailureDetector
     det = FailureDetector() if args.detect != "off" else None
     n_harvest = 0
@@ -175,6 +180,12 @@ def run_episode(env, model, parts, args, ep, log):
             log(f"  할아버지 집 이벤트: A {r['presses']}번, 끝={r['done']}")
             ti, got_pokemon_event, evt_mr = ti + 1, True, True
             REC["targets_reached"].append(list(MR_POKEMON))
+            if ti == len(targets):
+                # 10-23 (C3): 할아버지 집이 마지막 목표면 여기서 성공 (예전: 다음 반복에서 targets[ti] 범위 초과로 멈춤)
+                _save(pb, args)
+                return {"ok": r["done"], "steps": env.step_count, "heals": heals, "events": events, "whiteouts": whiteouts,
+                        "scripted": scripted, "battles": env.battles, "late_battles": late_battles,
+                        "lock_battles": lock_battles, "hp": mm.read_party_hp_total(pb), "seconds": round(time.time() - t0)}
             continue
         if here == MR_POKEMON:
             # 집 안 → 밖: 학습 구간 없음 → 맵이 바뀔 때까지 아래 (규칙)
@@ -292,30 +303,33 @@ def run_episode(env, model, parts, args, ep, log):
             log(f"  [{env.step_count}걸음] {map_name(here)}: 목표 {map_name(g)} (구간 {seg}, 최종 {map_name(target)})")
             last_goal = g
         env.goal_vec = goal_vec(g)
+        if envs_heal.real_frames(pb) != env._rendered_at:
+            REC["stale_obs"] += 1
+            if len(REC["stale_at"]) < 50:
+                REC["stale_at"].append(list(mm.read_position(pb)))
+            if args.fresh_obs:
+                pb.tick(1, True)
         action, _ = model.predict(env._get_obs(), deterministic=args.deterministic)
         before = mm.read_position(pb)
         w0 = info.get("whiteouts", 0)
         b0, e0 = env.battles, getattr(env, "events", 0)
         obs, _, terminated, truncated, info = env.step(action)
+        env._rendered_at = envs_heal.real_frames(pb)   # step은 마지막 1프레임을 그림 (잠김 처리 뒤에도)
         # 감지기 걸음: 이 반복에서 전투도 잠김 처리(run_event)도 없었을 때만 아래(반복 끝)에서 셈 (설계 보강 1)
         #   10-14 시험: 잠김(대화) 걸음을 세서 집 2층에서 'stall' 오탐 → 위치를 반복 끝으로 옮김
         plain_step = env.battles == b0 and getattr(env, "events", 0) == e0
         if info.get("whiteouts", 0) > w0 or (tuple(mm.read_position(pb)[:2]) == (24, 7) and here != (24, 7)):
             whiteouts += 1
             log(f"  전멸 → {map_name(mm.read_position(pb)[:2])}에서 이어감")
-        # 늦게 시작한 전투 (걸음 처리 뒤에 인카운터): 학습과 같은 A 연타 자동으로
-        if mm.in_battle(pb):
-            env._run_auto_battle()
-            late_battles += 1
-            continue
-        # 잠김 판별: 방향키인데 안 움직였고 움직일 수도 없음 → 이벤트
-        if int(action) < 4 and mm.read_position(pb) == before and not can_move(pb):
-            r = run_event(pb)
+        # 10-23 (C2, 사용자 결정): 잠김·늦은 전투는 학습과 같이 GoldEnv.step이 처리 (auto_event: 걸음 직후 SCRIPT_LOCK != 0이면 run_event,
+        #   전투는 걸음 직후 전투 중이면 자동). 예전엔 여기서 막힐 때마다 can_move로 약 56프레임 앞까지 시험해서 먼저 매크로를 돌렸음
+        #   → 학습 정책이 보던 '트레이너가 다가오는 중·조우 전환' 화면이 통합 실행에선 정책에 안 갔음. 지금은 학습과 같은 시점
+        #   late_battles는 이제 늘 0 (필드는 옛 결과와 같은 모양 유지)
+        if getattr(env, "events", 0) > e0:
             events += 1
-            kind = {0: "이벤트", 1: "야생 전투 (A 연타)", 2: "트레이너 전투 (A 연타)"}.get(r["battle"], "이벤트")
-            if r["battle"]:
+            if env.battles > b0:
                 lock_battles += 1
-            log(f"  {kind} (잠김, {map_name(here)}): A {r['presses']}번, 끝={r['done']}, HP {mm.read_party_hp_total(pb)}")
+            log(f"  잠김 처리 (GoldEnv auto_event, {map_name(here)}): 전투 {'있음' if env.battles > b0 else '없음'}, HP {mm.read_party_hp_total(pb)}")
             continue
         if det is not None and plain_step and det.step(mm.read_position(pb)) and _detected(det, pb, args, ep, log):
             break
@@ -343,7 +357,8 @@ def _finalize(r, args, env):
         valid = kind != "interrupted" and reached == intended[:len(reached)]
     return {"segments": list(REC["segments"]), "targets_reached": reached, "end_pos": list(mm.read_position(env.pyboy)),
             "stop_reason": REC["stop_reason"], "fail_kind": kind, "valid": valid, "detections": REC.get("detections", []),
-            "clock": REC["clock"], "game_time": REC["game_time"], "time_of_day": REC["time_of_day"]}
+            "clock": REC["clock"], "game_time": REC["game_time"], "time_of_day": REC["time_of_day"],
+            "stale_obs": REC.get("stale_obs"), "stale_at": REC.get("stale_at"), "fresh_obs": args.fresh_obs}
 
 
 def main():
@@ -354,6 +369,10 @@ def main():
     parser.add_argument("--speed", type=int, default=3)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--deterministic", action="store_true")
+    # 10-20: 확인 시험(A_s1 낮 8 → 18/20, M2B 10 → 0/20, 통합 실행이 E-lab과 일치) 뒤 사용자 결정으로 기본 켬
+    #   --no-fresh-obs = 10-20 이전 동작 (옛 결과 재현용)
+    parser.add_argument("--fresh-obs", action=argparse.BooleanOptionalAction, default=True,
+                        help="규칙·매크로 직후 예측 전에 1프레임 그려서 지난 화면 대신 지금 화면을 줌 (기본 켬)")
     parser.add_argument("--quiet", action="store_true", help="판마다 요약만")
     parser.add_argument("--start", default="states/start.state", help="시작 상태 (기본: 집 1층)")
     parser.add_argument("--targets", default="26,10;24,5", help="목표 맵 순서 '그룹,번호;...' (기본: 할아버지 집 → 연구소)")
@@ -383,7 +402,9 @@ def main():
     env = GoldEnv(render_mode=None if args.headless else "human", state_path=args.start,
                   max_steps=args.max_steps + 100, auto_battle=True, allowed_maps=list(all_maps), goal_maps=[MR_POKEMON],
                   move_mode=cfg.get("move_mode", "tile"), obs_memory=cfg.get("obs_memory", False), obs_goal=True,
-                  fast_battle=cfg.get("fast_battle", False))
+                  fast_battle=cfg.get("fast_battle", False),
+                  # 10-23 (C2): 학습과 같은 잠김 처리 (모델의 env_config 그대로. auto_event 없이 학습한 모델이면 잠김 처리 없음 = 학습과 같음)
+                  auto_event=cfg.get("auto_event", False))
     env.goal_maps = set()   # 도착으로 판이 끝나지 않게 (판 종료는 이 스크립트가 정함)
     env.pyboy.set_emulation_speed(0 if args.headless else args.speed)
     import envs.heal
@@ -416,7 +437,7 @@ def main():
         "kind": "run_story", "model": args.model, "model_sha1": sha1_file(args.model),
         "start": args.start, "start_sha1": sha1_file(args.start),
         "targets": [list(t) for t in args.target_list], "no_heal_at": sorted(list(t) for t in args.no_heal),
-        "max_steps": args.max_steps, "episodes": len(results), "deterministic": args.deterministic,
+        "max_steps": args.max_steps, "episodes": len(results), "deterministic": args.deterministic, "fresh_obs": args.fresh_obs,
         "clock": results[0]["clock"] if results else None,
         "game_times": sorted({r["game_time"] for r in results}),
         "ok": ok, "valid": sum(r["valid"] for r in results),

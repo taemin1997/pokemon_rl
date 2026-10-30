@@ -20,3 +20,5 @@
 | 10-02 | 버그 | [A 실험 reward hacking](2026-10-02_reward-hacking.md) |
 | 10-10 | 이정표 | [M2a 완료: 집 → 할아버지 집 → 연구소 한 판 10/10](2026-10-10_m2a_done.md) |
 | 10-10 | 발견 | [게임 시계가 실제 시각을 따라감 → 실행 시각마다 시간대(야생 포켓몬)가 다름](2026-10-10_rtc_wallclock.md) |
+| 10-21 | 발견 | [E-lab diagnose 첫 화면이 시간대와 상관없이 아침 팔레트](2026-10-21_elab_first_frame.md) |
+| 10-20 | 버그 | [통합 실행기(headless run_story)가 매크로 뒤 지난 화면으로 예측](2026-10-20_story_stale_obs.md) |
